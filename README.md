@@ -47,6 +47,7 @@ npm run db:reset        # drops, re-migrates, and re-seeds
 | `npm test` | Run the projection-engine unit tests (Vitest) |
 | `npm run db:migrate` | Apply Prisma migrations |
 | `npm run db:seed` | Seed realistic AED data |
+| `npm run db:clear` | Empty all data (keep schema) — see the app's empty states |
 | `npm run db:reset` | Reset + re-seed the database |
 | `npm run db:studio` | Open Prisma Studio |
 
