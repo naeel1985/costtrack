@@ -14,7 +14,9 @@
       "Bash(cd \"c:\\\\Users\\\\n.zuriek\\\\Downloads\\\\projects\\\\cost\" && rm -rf ../.cost-stash && git status --short | head -20 && echo \"--- files ---\" && ls)",
       "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\('deps:',Object.keys\\(p.dependencies\\).length\\);console.log\\('devDeps:',Object.keys\\(p.devDependencies\\).length\\);console.log\\(Object.keys\\(p.dependencies\\).join\\(', '\\)\\)\")",
       "Bash(npx prisma *)",
-      "Bash(npx vitest *)"
+      "Bash(npx vitest *)",
+      "Bash(git config *)",
+      "Bash(npx tsx *)"
     ],
     "additionalDirectories": [
       "c:\\Users\\n.zuriek\\Downloads\\projects\\.cost-stash"

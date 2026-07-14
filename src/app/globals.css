@@ -1,26 +1,159 @@
 @import "tailwindcss";
+@plugin "tailwindcss-animate";
 
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * A calm, modern financial palette. Neutral slate surfaces let the two
+ * semantic colours — positive (money in) and negative (money out) — carry all
+ * the meaning. Nothing here is coloured decoratively.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --radius: 0.75rem;
+
+  --background: oklch(0.995 0.001 240);
+  --foreground: oklch(0.21 0.02 250);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.02 250);
+
+  --primary: oklch(0.45 0.13 250);
+  --primary-foreground: oklch(0.99 0.005 250);
+
+  --secondary: oklch(0.965 0.005 250);
+  --secondary-foreground: oklch(0.3 0.02 250);
+
+  --muted: oklch(0.965 0.005 250);
+  --muted-foreground: oklch(0.53 0.02 250);
+
+  --accent: oklch(0.95 0.01 250);
+  --accent-foreground: oklch(0.3 0.02 250);
+
+  --destructive: oklch(0.58 0.21 25);
+  --destructive-foreground: oklch(0.99 0.005 250);
+
+  --positive: oklch(0.62 0.15 150);
+  --positive-foreground: oklch(0.99 0.005 150);
+  --negative: oklch(0.58 0.21 25);
+  --negative-foreground: oklch(0.99 0.005 25);
+  --warning: oklch(0.72 0.16 70);
+  --warning-foreground: oklch(0.24 0.05 70);
+
+  --border: oklch(0.92 0.005 250);
+  --input: oklch(0.92 0.005 250);
+  --ring: oklch(0.45 0.13 250);
+
+  --chart-1: oklch(0.55 0.14 250);
+  --chart-2: oklch(0.62 0.15 150);
+  --chart-3: oklch(0.7 0.15 70);
+  --chart-4: oklch(0.6 0.2 25);
+  --chart-5: oklch(0.55 0.16 300);
+}
+
+.dark {
+  --background: oklch(0.17 0.01 250);
+  --foreground: oklch(0.95 0.005 250);
+
+  --card: oklch(0.21 0.015 250);
+  --card-foreground: oklch(0.95 0.005 250);
+  --popover: oklch(0.21 0.015 250);
+  --popover-foreground: oklch(0.95 0.005 250);
+
+  --primary: oklch(0.7 0.13 250);
+  --primary-foreground: oklch(0.17 0.02 250);
+
+  --secondary: oklch(0.27 0.015 250);
+  --secondary-foreground: oklch(0.95 0.005 250);
+
+  --muted: oklch(0.27 0.015 250);
+  --muted-foreground: oklch(0.68 0.015 250);
+
+  --accent: oklch(0.3 0.02 250);
+  --accent-foreground: oklch(0.95 0.005 250);
+
+  --destructive: oklch(0.62 0.2 25);
+  --destructive-foreground: oklch(0.98 0.005 250);
+
+  --positive: oklch(0.68 0.15 150);
+  --positive-foreground: oklch(0.15 0.02 150);
+  --negative: oklch(0.66 0.2 25);
+  --negative-foreground: oklch(0.15 0.02 25);
+  --warning: oklch(0.78 0.15 70);
+  --warning-foreground: oklch(0.2 0.05 70);
+
+  --border: oklch(0.3 0.015 250 / 60%);
+  --input: oklch(0.32 0.015 250 / 70%);
+  --ring: oklch(0.6 0.12 250);
+
+  --chart-1: oklch(0.65 0.14 250);
+  --chart-2: oklch(0.68 0.15 150);
+  --chart-3: oklch(0.75 0.15 70);
+  --chart-4: oklch(0.66 0.2 25);
+  --chart-5: oklch(0.65 0.16 300);
 }
 
 @theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-positive: var(--positive);
+  --color-positive-foreground: var(--positive-foreground);
+  --color-negative: var(--negative);
+  --color-negative-foreground: var(--negative-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--border);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular figures for money everywhere it matters. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Thin, unobtrusive scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
