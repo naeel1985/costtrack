@@ -5,6 +5,7 @@
 import {
   addDays,
   endOfMonth,
+  format,
   startOfDay,
   startOfMonth,
   subMonths,
@@ -440,6 +441,91 @@ export async function getBudgets(month: string) {
     actualByCat.set(t.categoryId, (actualByCat.get(t.categoryId) ?? 0) + t.amountMinor);
   }
   return { budgets, categories, actualByCat: Object.fromEntries(actualByCat) };
+}
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+
+export interface ReportData {
+  months: { key: string; label: string; incomeMinor: number; expenseMinor: number; netMinor: number }[];
+  byCategory: { name: string; color: string; amountMinor: number }[];
+  topPayees: { name: string; amountMinor: number; count: number }[];
+  totalIncomeMinor: number;
+  totalExpenseMinor: number;
+  avgMonthlyExpenseMinor: number;
+  baseCurrency: string;
+  monthsBack: number;
+}
+
+export async function getReportData(monthsBack = 6): Promise<ReportData> {
+  const settings = await getSettings();
+  const now = new Date();
+  const from = startOfMonth(subMonths(now, monthsBack - 1));
+
+  const [txs, categories] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { status: "posted", type: { in: ["income", "expense"] }, date: { gte: from } },
+    }),
+    prisma.category.findMany(),
+  ]);
+  const catById = new Map(categories.map((c) => [c.id, c]));
+
+  // Monthly income vs expense buckets.
+  const monthMap = new Map<string, { incomeMinor: number; expenseMinor: number }>();
+  for (let i = 0; i < monthsBack; i++) {
+    const d = startOfMonth(subMonths(now, monthsBack - 1 - i));
+    monthMap.set(format(d, "yyyy-MM"), { incomeMinor: 0, expenseMinor: 0 });
+  }
+
+  const catTotals = new Map<string, number>();
+  const payeeTotals = new Map<string, { amountMinor: number; count: number }>();
+  let totalIncomeMinor = 0;
+  let totalExpenseMinor = 0;
+
+  for (const t of txs) {
+    const key = format(t.date, "yyyy-MM");
+    const bucket = monthMap.get(key);
+    if (t.type === "income") {
+      if (bucket) bucket.incomeMinor += t.amountMinor;
+      totalIncomeMinor += t.amountMinor;
+    } else {
+      if (bucket) bucket.expenseMinor += t.amountMinor;
+      totalExpenseMinor += t.amountMinor;
+      const catName = t.categoryId ? catById.get(t.categoryId)?.name ?? "Uncategorised" : "Uncategorised";
+      catTotals.set(catName, (catTotals.get(catName) ?? 0) + t.amountMinor);
+      const payee = (t.note ?? "").trim() || "Other";
+      const cur = payeeTotals.get(payee) ?? { amountMinor: 0, count: 0 };
+      payeeTotals.set(payee, { amountMinor: cur.amountMinor + t.amountMinor, count: cur.count + 1 });
+    }
+  }
+
+  const colorByCat = new Map(categories.map((c) => [c.name, c.color]));
+  const byCategory = [...catTotals.entries()]
+    .map(([name, amountMinor]) => ({ name, color: colorByCat.get(name) ?? "#94a3b8", amountMinor }))
+    .sort((a, b) => b.amountMinor - a.amountMinor);
+
+  const topPayees = [...payeeTotals.entries()]
+    .map(([name, v]) => ({ name, ...v }))
+    .sort((a, b) => b.amountMinor - a.amountMinor)
+    .slice(0, 8);
+
+  const months = [...monthMap.entries()].map(([key, v]) => ({
+    key,
+    label: format(new Date(`${key}-01`), "MMM"),
+    incomeMinor: v.incomeMinor,
+    expenseMinor: v.expenseMinor,
+    netMinor: v.incomeMinor - v.expenseMinor,
+  }));
+
+  return {
+    months,
+    byCategory,
+    topPayees,
+    totalIncomeMinor,
+    totalExpenseMinor,
+    avgMonthlyExpenseMinor: Math.round(totalExpenseMinor / monthsBack),
+    baseCurrency: settings.baseCurrency,
+    monthsBack,
+  };
 }
 
 // ── Rates & settings ──────────────────────────────────────────────────────────
