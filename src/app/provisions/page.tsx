@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getProvisions, getAccountsWithBalances } from "@/server/queries";
 import { ProvisionsView, type ProvisionCard } from "@/components/provisions/provisions-view";
 import type { AccountLite } from "@/lib/view-types";

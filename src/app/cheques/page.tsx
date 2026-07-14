@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getPdcs, getAccountsWithBalances, getCategories } from "@/server/queries";
 import { PdcRegister, type PdcRow } from "@/components/pdc/pdc-register";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";

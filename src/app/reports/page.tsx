@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getReportData } from "@/server/queries";
 import { PageHeader } from "@/components/shared";
 import { ReportsView } from "@/components/reports/reports-view";
