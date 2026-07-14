@@ -1,0 +1,113 @@
+Role & Goal
+
+You are building a feature-rich personal finance tracker for a single user based in the UAE (default currency AED, but support multi-currency). The core purpose is not just logging what was spent — it's forward-looking cash-flow tracking: the user knows about future obligations (especially Post-Dated Cheques / PDCs) and needs to see, at any moment, whether their accounts will hold enough money when each obligation hits.
+
+Treat this as a real product you own. Where I don't specify something, make a strong opinionated choice and build it well rather than asking me. Note your key decisions in a DECISIONS.md as you go.
+
+The three pillars this app must nail
+
+
+Income tracking — recurring (salary) and one-off (freelance, reimbursements, gifts), across multiple sources and accounts.
+Expense / cost tracking — daily expenses with categories, plus recurring costs (rent, subscriptions, loan installments).
+Future provisions & PDC tracking — this is the differentiator. The user issues and receives post-dated cheques and sets aside provisions for known upcoming costs. The app must project account balances into the future and warn when a cheque is likely to bounce or a provision is underfunded.
+
+
+Tech stack (use exactly this unless you have a strong reason)
+
+
+Next.js (latest, App Router) + TypeScript
+Tailwind CSS + shadcn/ui for components
+Prisma ORM with SQLite for zero-config local persistence (structure the code so swapping to Postgres later is trivial — keep DB-specific logic out of the UI)
+Server Actions for mutations; React Server Components for data fetching where sensible
+Recharts for charts
+date-fns for date math, Zod for validation, react-hook-form for forms
+Single-user, local-first. Skip heavy auth; a simple optional PIN/passcode gate is enough. Do not build multi-tenant infra.
+
+
+Data model (baseline — extend it as needed)
+
+Design a clean Prisma schema including at least:
+
+
+Account — name, type (cash / bank / credit_card / wallet), currency, opening balance, current computed balance.
+Category — name, kind (income | expense), icon, color, optional parent for subcategories.
+Transaction — the unified ledger: type (income | expense | transfer), amount, currency, date, account, category, note, tags, optional attachment/receipt reference, isRecurring link.
+RecurringRule — frequency (weekly / monthly / custom), interval, start date, end/occurrence count, next-run date, template (amount, category, account). Used to auto-generate upcoming income and costs.
+PDC (Post-Dated Cheque) — direction (issued = money going out | received = money coming in), payee/payer name, amount, currency, issue date, due/clearing date, bank name, cheque number, linked account, status (pending | cleared | bounced | cancelled | replaced), notes, optional link to a RecurringRule (e.g. 12 monthly rent cheques). Clearing a PDC should create the corresponding real Transaction.
+Provision / Sinking Fund — name, target amount, due date, priority, linked account, funded amount (computed from allocations), status.
+Budget — per category, per month, planned amount vs actual.
+
+
+Add indexes on dates; every model timestamped.
+
+Must-have features
+
+Dashboard (home):
+
+
+Net position across accounts, this-month income vs expense, savings rate.
+"Upcoming obligations" list (next 30/60/90 days) combining PDCs due, recurring costs, and provision due dates.
+Projected balance timeline — the hero feature. A chart/table projecting each account's balance day-by-day forward, factoring in scheduled income, recurring costs, and pending PDCs. Clearly flag any day a balance goes negative or below a user-set safety buffer ("⚠️ Cheque #204 for 5,000 AED may bounce on 15 Aug — projected balance 3,200").
+
+
+Income & Cost tabs:
+
+
+Fast entry (keyboard-friendly, quick-add). Filtering by date range, category, account, tag. Inline edit and delete.
+Recurring setup that generates future scheduled entries you can preview and confirm.
+
+
+PDC register:
+
+
+Table + a calendar view of cheques by clearing date. Filter by status/direction/bank.
+One-click "mark cleared / bounced", which reconciles into the ledger.
+Alerts for cheques clearing in the next N days.
+
+
+Provisions:
+
+
+Progress bars (funded vs target), on-track/behind indicator based on due date, suggested monthly set-aside.
+
+
+Reports & insights:
+
+
+Category breakdown (pie/treemap), spend trends over months, income vs expense over time, top merchants/payees.
+CSV/JSON import and export for all data (so the user is never locked in).
+
+
+Cross-cutting:
+
+
+Multi-currency with a manually-editable rate table (no external API dependency required).
+Dark mode. Fully responsive — this will be used on a phone daily, so mobile UX is first-class, not an afterthought.
+Seed script with realistic AED sample data (a salary, rent via 12 PDCs, some daily expenses, a couple of provisions) so the app is populated on first run.
+
+
+Where I want you to use your imagination
+
+Go beyond the list above. Strong candidates you should feel free to design and build if they add real value: a global command palette / quick-add (⌘K), smart categorization suggestions, "what-if" simulation (add a hypothetical expense and watch the projection update), cash-flow "runway" indicator (how many months current balances last at current burn), receipt attachment, recurring-cheque batch creation, month-end close/summary, notification center for upcoming obligations, and thoughtful empty/loading/error states. Surprise me with at least a couple of features I didn't ask for that a serious personal-finance user would love.
+
+Quality bar
+
+
+Clean, typed, well-organized code. Reusable components. Server actions validated with Zod. No any unless truly unavoidable.
+Money handled safely (store minor units / use a decimal-safe approach — no floating-point rounding bugs in totals).
+The projection engine is the core logic — isolate it in a well-tested lib/projection.ts module with unit tests covering PDC clearing, recurring generation, and negative-balance detection.
+A polished, calm, modern financial UI — not a generic dashboard template. Good typography, sensible spacing, meaningful color (green/red used purposefully, never decoratively).
+
+
+How to proceed
+
+
+Scaffold the Next.js app and confirm it runs.
+Design and migrate the Prisma schema; write the seed script.
+Build the projection engine with tests.
+Build screens in this order: Dashboard → Income/Cost tabs → PDC register → Provisions → Reports.
+Polish, mobile pass, dark mode, import/export.
+Write a clear README.md (setup, run, seed, how the projection logic works) and keep DECISIONS.md updated.
+
+
+Show me your schema and your feature plan first, then start building. Commit in logical chunks with clear messages.
