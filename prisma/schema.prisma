@@ -1,0 +1,231 @@
+// Prisma schema for the personal cash-flow tracker.
+//
+// Design notes:
+// - All monetary values are stored as INTEGER minor units (e.g. fils for AED,
+//   cents for USD). There is never a floating point number in the ledger.
+// - Enums are modelled as String columns (SQLite has no native enum support).
+//   The allowed values live in `src/lib/domain.ts` as TypeScript unions and are
+//   validated with Zod at every boundary. This keeps the swap to Postgres
+//   trivial (change datasource + optionally promote strings to enums).
+// - Every model is timestamped and date columns are indexed for projection.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                  String   @id @default(cuid())
+  name                String
+  type                String // cash | bank | credit_card | wallet
+  currency            String   @default("AED")
+  openingBalanceMinor Int      @default(0)
+  safetyBufferMinor   Int      @default(0) // warn when projected balance drops below this
+  color               String   @default("#64748b")
+  isArchived          Boolean  @default(false)
+  sortOrder           Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  transactions         Transaction[] @relation("AccountTransactions")
+  transfersIn          Transaction[] @relation("TransferAccount")
+  pdcs                 PDC[]
+  provisions           Provision[]
+  recurringRules       RecurringRule[]
+  provisionAllocations ProvisionAllocation[]
+
+  @@index([isArchived])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  kind      String // income | expense
+  icon      String   @default("Circle") // lucide icon name
+  color     String   @default("#64748b")
+  parentId  String?
+  parent    Category?  @relation("SubCategories", fields: [parentId], references: [id])
+  children  Category[] @relation("SubCategories")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions   Transaction[]
+  recurringRules RecurringRule[]
+  budgets        Budget[]
+
+  @@index([kind])
+}
+
+model Transaction {
+  id                String   @id @default(cuid())
+  type              String // income | expense | transfer
+  amountMinor       Int
+  currency          String   @default("AED")
+  date              DateTime
+  note              String?
+  tags              String   @default("[]") // JSON array of strings
+  attachmentPath    String?
+  status            String   @default("posted") // posted | scheduled
+
+  accountId         String
+  account           Account  @relation("AccountTransactions", fields: [accountId], references: [id], onDelete: Cascade)
+
+  // For transfers: the destination account.
+  transferAccountId String?
+  transferAccount   Account? @relation("TransferAccount", fields: [transferAccountId], references: [id])
+
+  categoryId        String?
+  category          Category? @relation(fields: [categoryId], references: [id])
+
+  recurringRuleId   String?
+  recurringRule     RecurringRule? @relation(fields: [recurringRuleId], references: [id])
+
+  // Back-link when this transaction was created by clearing a PDC.
+  pdc               PDC?     @relation("PdcClearing")
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([date])
+  @@index([accountId, date])
+  @@index([type])
+  @@index([status])
+}
+
+model RecurringRule {
+  id              String   @id @default(cuid())
+  name            String
+  type            String // income | expense
+  frequency       String // weekly | monthly | yearly | custom
+  interval        Int      @default(1) // every N frequency units
+  startDate       DateTime
+  endDate         DateTime?
+  occurrenceCount Int? // stop after N occurrences (alternative to endDate)
+  nextRunDate     DateTime
+  isActive        Boolean  @default(true)
+
+  // Template for generated transactions.
+  amountMinor     Int
+  currency        String   @default("AED")
+  accountId       String
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  categoryId      String?
+  category        Category? @relation(fields: [categoryId], references: [id])
+  note            String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  transactions    Transaction[]
+  pdcs            PDC[]
+
+  @@index([nextRunDate])
+  @@index([isActive])
+}
+
+model PDC {
+  id                  String   @id @default(cuid())
+  direction           String // issued (money out) | received (money in)
+  counterparty        String // payee (issued) or payer (received)
+  amountMinor         Int
+  currency            String   @default("AED")
+  issueDate           DateTime
+  dueDate             DateTime // clearing date
+  bankName            String?
+  chequeNumber        String?
+  status              String   @default("pending") // pending | cleared | bounced | cancelled | replaced
+  notes               String?
+
+  accountId           String
+  account             Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  recurringRuleId     String?
+  recurringRule       RecurringRule? @relation(fields: [recurringRuleId], references: [id])
+
+  // The ledger transaction produced when the cheque cleared.
+  clearedTransactionId String? @unique
+  clearedTransaction   Transaction? @relation("PdcClearing", fields: [clearedTransactionId], references: [id])
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([dueDate])
+  @@index([status])
+  @@index([direction])
+}
+
+model Provision {
+  id            String   @id @default(cuid())
+  name          String
+  targetMinor   Int
+  currency      String   @default("AED")
+  dueDate       DateTime?
+  priority      Int      @default(2) // 1 = high, 2 = medium, 3 = low
+  status        String   @default("active") // active | funded | released | cancelled
+
+  accountId     String?
+  account       Account? @relation(fields: [accountId], references: [id])
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  allocations   ProvisionAllocation[]
+
+  @@index([dueDate])
+  @@index([status])
+}
+
+model ProvisionAllocation {
+  id           String   @id @default(cuid())
+  provisionId  String
+  provision    Provision @relation(fields: [provisionId], references: [id], onDelete: Cascade)
+  amountMinor  Int
+  date         DateTime
+  note         String?
+  accountId    String?
+  account      Account? @relation(fields: [accountId], references: [id])
+  createdAt    DateTime @default(now())
+
+  @@index([provisionId])
+  @@index([date])
+}
+
+model Budget {
+  id           String   @id @default(cuid())
+  categoryId   String
+  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  month        String // "YYYY-MM"
+  plannedMinor Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([categoryId, month])
+  @@index([month])
+}
+
+model ExchangeRate {
+  id        String   @id @default(cuid())
+  base      String // e.g. "AED"
+  quote     String // e.g. "USD"
+  rate      Float // 1 base = `rate` quote
+  asOf      DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([base, quote])
+}
+
+model AppSetting {
+  id                 String   @id @default("singleton")
+  baseCurrency       String   @default("AED")
+  defaultBufferMinor Int      @default(0)
+  pinHash            String? // optional passcode gate
+  theme              String   @default("system") // light | dark | system
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}

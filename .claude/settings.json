@@ -4,7 +4,20 @@
       "Bash(git --version)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(mkdir -p ../.cost-stash)",
+      "Bash(mv prompt.txt .claude .git ../.cost-stash/)",
+      "Bash(npx --yes create-next-app@latest . --ts --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm --no-turbopack --no-git)",
+      "Bash(rm -rf .git)",
+      "Bash(mv ../.cost-stash/prompt.txt ../.cost-stash/.claude ../.cost-stash/.git .)",
+      "Bash(rmdir ../.cost-stash)",
+      "Bash(cd \"c:\\\\Users\\\\n.zuriek\\\\Downloads\\\\projects\\\\cost\" && rm -rf ../.cost-stash && git status --short | head -20 && echo \"--- files ---\" && ls)",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\('deps:',Object.keys\\(p.dependencies\\).length\\);console.log\\('devDeps:',Object.keys\\(p.devDependencies\\).length\\);console.log\\(Object.keys\\(p.dependencies\\).join\\(', '\\)\\)\")",
+      "Bash(npx prisma *)",
+      "Bash(npx vitest *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\n.zuriek\\Downloads\\projects\\.cost-stash"
     ]
   }
 }
