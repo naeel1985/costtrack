@@ -8,8 +8,10 @@ set up any database on cPanel.
 
 - **`server.js`** — the Passenger startup file. cPanel runs this directly; it
   boots Next.js in production and listens on `process.env.PORT` (Passenger binds it).
-- **`postinstall: "prisma generate"`** in `package.json` — regenerates the Prisma
-  client for the server's platform during `npm install`.
+- **`build: "prisma generate && next build"`** in `package.json` — the Prisma
+  client is generated as part of the build (which runs in the app root, where the
+  schema lives). Note: cPanel runs `npm install` in the venv lib folder that has
+  no `prisma/` dir, so generation must **not** be a `postinstall` hook.
 - **Prisma `binaryTargets`** now include a Linux engine (`rhel-openssl-3.0.x`, the
   usual CloudLinux/AlmaLinux target) plus `native`.
 
@@ -31,13 +33,13 @@ Nothing else changes — the app is the same.
 3. **Add the environment variables** (see the list below) in the app's
    *Environment variables* section, then **Save**.
 
-4. **Install dependencies:** click **Run NPM Install**. This installs packages and
-   runs `postinstall` → `prisma generate` (builds the Linux Prisma engine).
+4. **Install dependencies:** click **Run NPM Install** (installs packages incl. the
+   Prisma engines). This no longer generates the client — the build does.
 
-5. **Build the app.** In the app's terminal (the panel shows a line like
-   `source /home/USER/nodevenv/APP/NODE/bin/activate && cd ~/APP`), run:
+5. **Build the app.** Enter the app (the panel shows *Run JS script* and a command
+   like `source /home/USER/nodevenv/APP/NODE/bin/activate && cd ~/APP`), then run:
    ```bash
-   npm run build
+   npm run build      # runs `prisma generate` then `next build`
    ```
    If your plan has no terminal or the build runs out of memory, build locally
    (`npm run build`) and upload the generated **`.next`** folder alongside the code.
