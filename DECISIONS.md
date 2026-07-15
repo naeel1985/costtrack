@@ -92,10 +92,14 @@ Running log of the meaningful choices made while building Cashflow, and why.
 The app went from single-user local-first to a secure multi-tenant app. Key
 decisions:
 
-- **PostgreSQL** via Prisma (`provider = "postgresql"`). A `docker-compose.yml`
-  brings up Postgres in one command; `DATABASE_URL` is the only knob. Where no
-  Postgres/Docker is available, `npm run db:embedded` starts an in-process
-  Postgres-wire server (PGlite) for local verification — the same schema and SQL.
+- **PostgreSQL** via Prisma (`provider = "postgresql"`), hosted on **Neon**
+  (serverless). The datasource uses two URLs: `DATABASE_URL` is Neon's **pooled**
+  (PgBouncer) endpoint with `pgbouncer=true` (disables prepared statements, which
+  transaction-mode pooling can't keep) for the app at runtime; `directUrl`
+  (`DIRECT_URL`) is the **unpooled** endpoint used only by Prisma Migrate. A
+  `docker-compose.yml` (local Postgres) and `npm run db:embedded` (in-process
+  PGlite, same wire protocol) remain drop-in alternatives — only the two URLs
+  change. Migration + seed + full auth/encryption flow were verified live on Neon.
 - **Custom auth, not a library.** Full control over the exact requirements
   (username *or* email login, email-verification gate, login-attempt telemetry).
   Passwords are hashed with **scrypt** (memory-hard) + random per-password salt,

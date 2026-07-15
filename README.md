@@ -25,16 +25,30 @@ rate table (no external API).
 
 ## Quick start
 
-The app is multi-user and stores data in **PostgreSQL**.
+The app is multi-user and stores data in **PostgreSQL**. It's configured for
+**Neon** (serverless Postgres) out of the box — `DATABASE_URL` (pooled) and
+`DIRECT_URL` (unpooled, for migrations) live in `.env`.
 
 ```bash
 npm install
-cp .env.example .env       # then fill in the secrets (see below)
-docker compose up -d       # local Postgres on :5432 (matches .env)
-npm run db:migrate         # create the schema
+# .env already points at the Neon project. To use your own DB, edit
+# DATABASE_URL / DIRECT_URL (see "Database options" below).
+npm run db:migrate         # create the schema (uses DIRECT_URL)
 npm run db:seed            # admin (from .env) + a verified demo user
 npm run dev                # http://localhost:3000
 ```
+
+### Database options
+
+- **Neon (default):** get the pooled + direct connection strings from the Neon
+  console or CLI (`npx neon connection-string --pooled` / without `--pooled`).
+  The pooled `DATABASE_URL` must end with `&pgbouncer=true` (PgBouncer
+  transaction mode). `DIRECT_URL` is the unpooled URL, used only by Prisma
+  Migrate.
+- **Local Docker Postgres:** `docker compose up -d`, then set both
+  `DATABASE_URL` and `DIRECT_URL` to `postgresql://cashflow:cashflow_dev_pw@localhost:5432/cashflow?schema=public`.
+- **No Docker/Postgres:** `npm run db:embedded` (in-process PGlite) with a
+  pooled-style URL — see below.
 
 Sign in with the seeded **demo** account, or register your own (you'll get an
 email-verification link — see *Email* below):

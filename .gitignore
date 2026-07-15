@@ -55,3 +55,6 @@ dev-outbox/
 # pglite verification DB
 .pglite-data/
 pglite.log
+
+# Neon workspace link (IDs, not secrets — kept local)
+.neon
