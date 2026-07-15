@@ -3,10 +3,11 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Command, Plus, Wallet } from "lucide-react";
+import { Command, Plus, Shield, Wallet } from "lucide-react";
 import { NAV_ITEMS } from "@/components/nav-items";
 import { ModeToggle } from "@/components/mode-toggle";
 import { useApp } from "@/components/app-interactive";
+import { UserMenu, type ShellUser } from "@/components/user-menu";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -15,7 +16,7 @@ function isActive(pathname: string, href: string) {
   return pathname.startsWith(href);
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({ user, children }: { user: ShellUser; children: React.ReactNode }) {
   const pathname = usePathname();
   const { openPalette, openQuickAdd } = useApp();
   const primary = NAV_ITEMS.filter((i) => i.primary);
@@ -58,6 +59,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
+          {user.role === "admin" && (
+            <Link
+              href="/admin"
+              className={cn(
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                isActive(pathname, "/admin")
+                  ? "bg-secondary text-foreground"
+                  : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+              )}
+            >
+              <Shield className="h-4 w-4" /> Admin
+            </Link>
+          )}
         </nav>
 
         <button
@@ -69,6 +83,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </span>
           <kbd className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px]">⌘K</kbd>
         </button>
+
+        <div className="mt-2">
+          <UserMenu user={user} />
+        </div>
       </aside>
 
       {/* Main column */}
@@ -95,6 +113,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Button size="sm" className="gap-1.5 md:hidden" onClick={() => openQuickAdd("expense")}>
               <Plus className="h-4 w-4" /> Add
             </Button>
+            <div className="md:hidden">
+              <UserMenu user={user} compact />
+            </div>
           </div>
         </header>
 

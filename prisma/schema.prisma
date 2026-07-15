@@ -1,35 +1,136 @@
-// Prisma schema for the personal cash-flow tracker.
+// Prisma schema — multi-user, encrypted, PostgreSQL.
 //
-// Design notes:
-// - All monetary values are stored as INTEGER minor units (e.g. fils for AED,
-//   cents for USD). There is never a floating point number in the ledger.
-// - Enums are modelled as String columns (SQLite has no native enum support).
-//   The allowed values live in `src/lib/domain.ts` as TypeScript unions and are
-//   validated with Zod at every boundary. This keeps the swap to Postgres
-//   trivial (change datasource + optionally promote strings to enums).
-// - Every model is timestamped and date columns are indexed for projection.
+// Security model (see DECISIONS.md for the full rationale):
+// - Every user-owned row carries `userId` and is only ever queried through the
+//   authenticated user's id. Admins never query these tables.
+// - Sensitive financial fields are stored as AES-256-GCM ciphertext (base64) in
+//   `String` columns, encrypted with a per-user Data Encryption Key (DEK). The
+//   DEK is wrapped by a key derived from the user's password, so nobody — not
+//   another user, not the admin, not someone with a DB dump — can decrypt a
+//   user's data without that user's password.
+// - Columns needed for querying/sorting (ids, type, status, currency, dates,
+//   flags) stay plaintext; they are low-sensitivity without the amounts/names.
+// - User *identity* (email, phone, full name) is plaintext because the admin is
+//   explicitly allowed to see it; only financial DATA is DEK-encrypted.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
+// ── Auth & identity ───────────────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  username       String    @unique
+  email          String    @unique
+  fullName       String
+  phone          String?
+  role           String    @default("user") // user | admin
+
+  // Auth. `passwordHash` is a self-describing scrypt string (algo, params,
+  // salt and hash). The DEK is random per user, wrapped by a password-derived
+  // key using `dekSalt`.
+  passwordHash   String
+  dekWrapped     String
+  dekSalt        String
+
+  emailVerified   Boolean   @default(false)
+  emailVerifiedAt DateTime?
+  isActive        Boolean   @default(true)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  sessions       Session[]
+  emailTokens    EmailToken[]
+  loginAttempts  LoginAttempt[]
+
+  accounts       Account[]
+  categories     Category[]
+  transactions   Transaction[]
+  recurringRules RecurringRule[]
+  pdcs           PDC[]
+  provisions     Provision[]
+  provisionAllocations ProvisionAllocation[]
+  budgets        Budget[]
+  exchangeRates  ExchangeRate[]
+  settings       AppSetting?
+
+  @@index([email])
+  @@index([role])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // sha256 of the opaque cookie token (the raw token is never stored).
+  tokenHash  String   @unique
+  // The user's DEK, re-encrypted with the server key so an active session can
+  // decrypt data without re-deriving from the password on every request.
+  encDek     String
+  ip         String?
+  userAgent  String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model EmailToken {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique
+  type       String    @default("verify_email") // verify_email
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model LoginAttempt {
+  id         String   @id @default(cuid())
+  identifier String // username or email entered
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  success    Boolean
+  reason     String? // bad_password | no_such_user | unverified | locked | ok
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([identifier])
+}
+
+// ── Domain (per-user, encrypted) ──────────────────────────────────────────────
+// `*Enc` columns hold base64 AES-256-GCM ciphertext of the corresponding value.
+
 model Account {
-  id                  String   @id @default(cuid())
-  name                String
-  type                String // cash | bank | credit_card | wallet
-  currency            String   @default("AED")
-  openingBalanceMinor Int      @default(0)
-  safetyBufferMinor   Int      @default(0) // warn when projected balance drops below this
-  color               String   @default("#64748b")
-  isArchived          Boolean  @default(false)
-  sortOrder           Int      @default(0)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nameEnc           String // encrypted name
+  type              String // cash | bank | credit_card | wallet
+  currency          String   @default("AED")
+  openingBalanceEnc String // encrypted minor units
+  safetyBufferEnc   String // encrypted minor units
+  color             String   @default("#64748b")
+  isArchived        Boolean  @default(false)
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   transactions         Transaction[] @relation("AccountTransactions")
   transfersIn          Transaction[] @relation("TransferAccount")
@@ -38,14 +139,18 @@ model Account {
   recurringRules       RecurringRule[]
   provisionAllocations ProvisionAllocation[]
 
-  @@index([isArchived])
+  @@index([userId])
+  @@index([userId, isArchived])
 }
 
 model Category {
   id        String   @id @default(cuid())
-  name      String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nameEnc   String // encrypted name
   kind      String // income | expense
-  icon      String   @default("Circle") // lucide icon name
+  icon      String   @default("Circle")
   color     String   @default("#64748b")
   parentId  String?
   parent    Category?  @relation("SubCategories", fields: [parentId], references: [id])
@@ -58,24 +163,27 @@ model Category {
   recurringRules RecurringRule[]
   budgets        Budget[]
 
-  @@index([kind])
+  @@index([userId])
+  @@index([userId, kind])
 }
 
 model Transaction {
   id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   type              String // income | expense | transfer
-  amountMinor       Int
+  amountEnc         String // encrypted minor units
   currency          String   @default("AED")
   date              DateTime
-  note              String?
-  tags              String   @default("[]") // JSON array of strings
+  noteEnc           String? // encrypted note
+  tagsEnc           String? // encrypted JSON array of tags
   attachmentPath    String?
   status            String   @default("posted") // posted | scheduled
 
   accountId         String
   account           Account  @relation("AccountTransactions", fields: [accountId], references: [id], onDelete: Cascade)
 
-  // For transfers: the destination account.
   transferAccountId String?
   transferAccount   Account? @relation("TransferAccount", fields: [transferAccountId], references: [id])
 
@@ -85,38 +193,39 @@ model Transaction {
   recurringRuleId   String?
   recurringRule     RecurringRule? @relation(fields: [recurringRuleId], references: [id])
 
-  // Back-link when this transaction was created by clearing a PDC.
   pdc               PDC?     @relation("PdcClearing")
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  @@index([date])
-  @@index([accountId, date])
-  @@index([type])
-  @@index([status])
+  @@index([userId, date])
+  @@index([userId, accountId, date])
+  @@index([userId, type])
+  @@index([userId, status])
 }
 
 model RecurringRule {
   id              String   @id @default(cuid())
-  name            String
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nameEnc         String // encrypted name
   type            String // income | expense
   frequency       String // weekly | monthly | yearly | custom
-  interval        Int      @default(1) // every N frequency units
+  interval        Int      @default(1)
   startDate       DateTime
   endDate         DateTime?
-  occurrenceCount Int? // stop after N occurrences (alternative to endDate)
+  occurrenceCount Int?
   nextRunDate     DateTime
   isActive        Boolean  @default(true)
 
-  // Template for generated transactions.
-  amountMinor     Int
+  amountEnc       String // encrypted minor units
   currency        String   @default("AED")
   accountId       String
   account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
   categoryId      String?
   category        Category? @relation(fields: [categoryId], references: [id])
-  note            String?
+  noteEnc         String? // encrypted note
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -124,22 +233,26 @@ model RecurringRule {
   transactions    Transaction[]
   pdcs            PDC[]
 
-  @@index([nextRunDate])
-  @@index([isActive])
+  @@index([userId])
+  @@index([userId, nextRunDate])
+  @@index([userId, isActive])
 }
 
 model PDC {
   id                  String   @id @default(cuid())
-  direction           String // issued (money out) | received (money in)
-  counterparty        String // payee (issued) or payer (received)
-  amountMinor         Int
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  direction           String // issued | received
+  counterpartyEnc     String // encrypted
+  amountEnc           String // encrypted minor units
   currency            String   @default("AED")
   issueDate           DateTime
-  dueDate             DateTime // clearing date
-  bankName            String?
-  chequeNumber        String?
+  dueDate             DateTime
+  bankNameEnc         String? // encrypted
+  chequeNumberEnc     String? // encrypted
   status              String   @default("pending") // pending | cleared | bounced | cancelled | replaced
-  notes               String?
+  notesEnc            String? // encrypted
 
   accountId           String
   account             Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
@@ -147,25 +260,28 @@ model PDC {
   recurringRuleId     String?
   recurringRule       RecurringRule? @relation(fields: [recurringRuleId], references: [id])
 
-  // The ledger transaction produced when the cheque cleared.
   clearedTransactionId String? @unique
   clearedTransaction   Transaction? @relation("PdcClearing", fields: [clearedTransactionId], references: [id])
 
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  @@index([dueDate])
-  @@index([status])
-  @@index([direction])
+  @@index([userId])
+  @@index([userId, dueDate])
+  @@index([userId, status])
+  @@index([userId, direction])
 }
 
 model Provision {
   id            String   @id @default(cuid())
-  name          String
-  targetMinor   Int
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  nameEnc       String // encrypted
+  targetEnc     String // encrypted minor units
   currency      String   @default("AED")
   dueDate       DateTime?
-  priority      Int      @default(2) // 1 = high, 2 = medium, 3 = low
+  priority      Int      @default(2)
   status        String   @default("active") // active | funded | released | cancelled
 
   accountId     String?
@@ -176,56 +292,69 @@ model Provision {
 
   allocations   ProvisionAllocation[]
 
-  @@index([dueDate])
-  @@index([status])
+  @@index([userId])
+  @@index([userId, dueDate])
+  @@index([userId, status])
 }
 
 model ProvisionAllocation {
   id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   provisionId  String
   provision    Provision @relation(fields: [provisionId], references: [id], onDelete: Cascade)
-  amountMinor  Int
+  amountEnc    String // encrypted minor units
   date         DateTime
-  note         String?
+  noteEnc      String? // encrypted
   accountId    String?
   account      Account? @relation(fields: [accountId], references: [id])
   createdAt    DateTime @default(now())
 
+  @@index([userId])
   @@index([provisionId])
-  @@index([date])
 }
 
 model Budget {
   id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   categoryId   String
   category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   month        String // "YYYY-MM"
-  plannedMinor Int
+  plannedEnc   String // encrypted minor units
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   @@unique([categoryId, month])
-  @@index([month])
+  @@index([userId, month])
 }
 
 model ExchangeRate {
   id        String   @id @default(cuid())
-  base      String // e.g. "AED"
-  quote     String // e.g. "USD"
-  rate      Float // 1 base = `rate` quote
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  base      String
+  quote     String
+  rate      Float
   asOf      DateTime @default(now())
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([base, quote])
+  @@unique([userId, base, quote])
+  @@index([userId])
 }
 
 model AppSetting {
-  id                 String   @id @default("singleton")
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   baseCurrency       String   @default("AED")
   defaultBufferMinor Int      @default(0)
-  pinHash            String? // optional passcode gate
-  theme              String   @default("system") // light | dark | system
+  theme              String   @default("system")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }

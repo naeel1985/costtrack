@@ -37,7 +37,7 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
     note: t.note,
     tagList: t.tagList,
     accountId: t.accountId,
-    account: { name: t.account.name, color: t.account.color },
+    account: { name: t.account?.name ?? "", color: t.account?.color ?? "#64748b" },
     transferAccount: t.transferAccount ? { name: t.transferAccount.name } : null,
     categoryId: t.categoryId,
     category: t.category ? { name: t.category.name, color: t.category.color } : null,
@@ -58,7 +58,7 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
       occurrenceCount: r.occurrenceCount,
       isActive: r.isActive,
       accountId: r.accountId,
-      accountName: r.account.name,
+      accountName: r.account?.name ?? "",
       categoryId: r.categoryId,
       categoryName: r.category?.name ?? null,
     }));

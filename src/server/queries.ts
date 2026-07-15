@@ -1,6 +1,8 @@
-// Server-side read layer (used by React Server Components). All DB access for
-// reads funnels through here so pages stay declarative and the projection is
-// assembled in exactly one place.
+// Server-side read layer (used by React Server Components). Every function
+// resolves the authenticated user (+ their DEK) via requireUser(), scopes all
+// DB access to that user's id, and decrypts rows through the crypto map before
+// returning. Pages therefore keep working with plain numbers/strings and can
+// never see another user's data.
 
 import {
   addDays,
@@ -11,11 +13,22 @@ import {
   subMonths,
 } from "date-fns";
 import { prisma } from "@/lib/db";
-import { parseTags } from "@/lib/utils";
+import { requireUser } from "@/server/auth";
+import {
+  decryptAccount,
+  decryptBudget,
+  decryptCategory,
+  decryptPdc,
+  decryptProvision,
+  decryptRecurring,
+  decryptTransaction,
+  type DecryptedAccount,
+} from "@/server/crypto-map";
 import {
   computeRunway,
   eventsFromPdcs,
   eventsFromRecurring,
+  expandRecurrence,
   projectBalances,
   type ProjectionAccount,
   type ProjectionEvent,
@@ -25,45 +38,34 @@ import {
 import { computeBalances } from "./balances";
 
 export async function getSettings() {
-  const existing = await prisma.appSetting.findUnique({ where: { id: "singleton" } });
+  const { user } = await requireUser();
+  const existing = await prisma.appSetting.findUnique({ where: { userId: user.id } });
   if (existing) return existing;
-  return prisma.appSetting.create({ data: { id: "singleton" } });
+  return prisma.appSetting.create({ data: { userId: user.id } });
 }
 
-export type AccountWithBalance = Awaited<
-  ReturnType<typeof getAccountsWithBalances>
->[number];
+export type AccountWithBalance = DecryptedAccount & { balanceMinor: number };
 
-export async function getAccountsWithBalances(includeArchived = false) {
-  const [accounts, transactions] = await Promise.all([
+export async function getAccountsWithBalances(includeArchived = false): Promise<AccountWithBalance[]> {
+  const { user, dek } = await requireUser();
+  const [rawAccounts, rawTx] = await Promise.all([
     prisma.account.findMany({
-      where: includeArchived ? {} : { isArchived: false },
+      where: { userId: user.id, ...(includeArchived ? {} : { isArchived: false }) },
       orderBy: { sortOrder: "asc" },
     }),
-    prisma.transaction.findMany({
-      where: { status: "posted" },
-      select: {
-        type: true,
-        amountMinor: true,
-        accountId: true,
-        transferAccountId: true,
-        date: true,
-        status: true,
-      },
-    }),
+    prisma.transaction.findMany({ where: { userId: user.id, status: "posted" } }),
   ]);
 
+  const accounts = rawAccounts.map((a) => decryptAccount(a, dek));
+  const transactions = rawTx.map((t) => decryptTransaction(t, dek));
   const balances = computeBalances(accounts, transactions);
-  return accounts.map((a) => ({
-    ...a,
-    balanceMinor: balances[a.id] ?? a.openingBalanceMinor,
-  }));
+  return accounts.map((a) => ({ ...a, balanceMinor: balances[a.id] ?? a.openingBalanceMinor }));
 }
 
 export interface WhatIfEvent {
   date: Date;
   accountId: string;
-  amountMinor: number; // signed
+  amountMinor: number;
   label: string;
 }
 
@@ -72,42 +74,29 @@ export interface BuildProjectionOptions {
   whatIf?: WhatIfEvent[];
 }
 
-/**
- * Assemble the full forward projection from the DB: current balances +
- * recurring rules + pending PDCs + already-scheduled transactions, then run the
- * pure engine. `whatIf` events are hypothetical and layered on top.
- */
 export async function getProjection({
   horizonDays = 90,
   whatIf = [],
-}: BuildProjectionOptions = {}): Promise<{
-  result: ProjectionResult;
-  accounts: ProjectionAccount[];
-}> {
+}: BuildProjectionOptions = {}): Promise<{ result: ProjectionResult; accounts: ProjectionAccount[] }> {
+  const { user, dek } = await requireUser();
   const start = startOfDay(new Date());
   const end = addDays(start, horizonDays);
 
-  const [accounts, allPosted, scheduled, rules, pdcs] = await Promise.all([
-    prisma.account.findMany({ where: { isArchived: false }, orderBy: { sortOrder: "asc" } }),
-    prisma.transaction.findMany({
-      where: { status: "posted" },
-      select: {
-        type: true,
-        amountMinor: true,
-        accountId: true,
-        transferAccountId: true,
-        date: true,
-        status: true,
-      },
-    }),
-    prisma.transaction.findMany({
-      where: { status: "scheduled", date: { gte: start, lte: end } },
-    }),
-    prisma.recurringRule.findMany({ where: { isActive: true } }),
-    prisma.pDC.findMany({ where: { status: "pending" } }),
+  const [rawAccounts, rawPosted, rawScheduled, rawRules, rawPdcs] = await Promise.all([
+    prisma.account.findMany({ where: { userId: user.id, isArchived: false }, orderBy: { sortOrder: "asc" } }),
+    prisma.transaction.findMany({ where: { userId: user.id, status: "posted" } }),
+    prisma.transaction.findMany({ where: { userId: user.id, status: "scheduled", date: { gte: start, lte: end } } }),
+    prisma.recurringRule.findMany({ where: { userId: user.id, isActive: true } }),
+    prisma.pDC.findMany({ where: { userId: user.id, status: "pending" } }),
   ]);
 
-  const currentBalances = computeBalances(accounts, allPosted, start);
+  const accounts = rawAccounts.map((a) => decryptAccount(a, dek));
+  const posted = rawPosted.map((t) => decryptTransaction(t, dek));
+  const scheduled = rawScheduled.map((t) => decryptTransaction(t, dek));
+  const rules = rawRules.map((r) => decryptRecurring(r, dek));
+  const pdcs = rawPdcs.map((p) => decryptPdc(p, dek));
+
+  const currentBalances = computeBalances(accounts, posted, start);
 
   const projAccounts: ProjectionAccount[] = accounts.map((a) => ({
     id: a.id,
@@ -175,37 +164,39 @@ export interface UpcomingObligation {
   date: Date;
   label: string;
   sublabel?: string;
-  amountMinor: number; // signed: negative = outflow
+  amountMinor: number;
   currency: string;
   accountId?: string;
   status?: string;
 }
 
 export async function getUpcomingObligations(horizonDays = 90): Promise<UpcomingObligation[]> {
+  const { user, dek } = await requireUser();
   const start = startOfDay(new Date());
   const end = addDays(start, horizonDays);
 
-  const [pdcs, rules, provisions] = await Promise.all([
+  const [rawPdcs, rawRules, rawProvisions] = await Promise.all([
     prisma.pDC.findMany({
-      where: { status: "pending", dueDate: { gte: start, lte: end } },
+      where: { userId: user.id, status: "pending", dueDate: { gte: start, lte: end } },
       include: { account: true },
     }),
-    prisma.recurringRule.findMany({ where: { isActive: true }, include: { account: true, category: true } }),
+    prisma.recurringRule.findMany({ where: { userId: user.id, isActive: true }, include: { account: true, category: true } }),
     prisma.provision.findMany({
-      where: { status: "active", dueDate: { gte: start, lte: end } },
+      where: { userId: user.id, status: "active", dueDate: { gte: start, lte: end } },
       include: { allocations: true },
     }),
   ]);
 
   const items: UpcomingObligation[] = [];
 
-  for (const p of pdcs) {
+  for (const raw of rawPdcs) {
+    const p = decryptPdc(raw, dek);
     items.push({
       id: p.id,
       kind: "pdc",
       date: p.dueDate,
       label: p.direction === "issued" ? `Cheque to ${p.counterparty}` : `Cheque from ${p.counterparty}`,
-      sublabel: `${p.chequeNumber ? `#${p.chequeNumber} · ` : ""}${p.account.name}`,
+      sublabel: `${p.chequeNumber ? `#${p.chequeNumber} · ` : ""}${p.account?.name ?? ""}`,
       amountMinor: p.direction === "received" ? p.amountMinor : -p.amountMinor,
       currency: p.currency,
       accountId: p.accountId,
@@ -213,14 +204,19 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
     });
   }
 
-  for (const r of rules) {
-    for (const date of eventDatesForRule(r, start, end)) {
+  for (const raw of rawRules) {
+    const r = decryptRecurring(raw, dek);
+    for (const date of expandRecurrence(
+      { frequency: r.frequency as never, interval: r.interval, startDate: r.startDate, endDate: r.endDate, occurrenceCount: r.occurrenceCount },
+      start,
+      end,
+    )) {
       items.push({
         id: `${r.id}:${date.getTime()}`,
         kind: "recurring",
         date,
         label: r.name,
-        sublabel: `${r.category?.name ? `${r.category.name} · ` : ""}${r.account.name}`,
+        sublabel: `${r.category?.name ? `${r.category.name} · ` : ""}${r.account?.name ?? ""}`,
         amountMinor: r.type === "income" ? r.amountMinor : -r.amountMinor,
         currency: r.currency,
         accountId: r.accountId,
@@ -228,7 +224,8 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
     }
   }
 
-  for (const pr of provisions) {
+  for (const raw of rawProvisions) {
+    const pr = decryptProvision(raw, dek);
     const funded = pr.allocations.reduce((s, a) => s + a.amountMinor, 0);
     const shortfall = Math.max(0, pr.targetMinor - funded);
     items.push({
@@ -246,27 +243,6 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
   return items.sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
-// Local helper — expand a rule's next occurrences within a window (mirrors the
-// engine's logic but returns Date[] for the obligations feed).
-import { expandRecurrence } from "@/lib/projection";
-function eventDatesForRule(
-  r: { frequency: string; interval: number; startDate: Date; endDate: Date | null; occurrenceCount: number | null },
-  from: Date,
-  to: Date,
-): Date[] {
-  return expandRecurrence(
-    {
-      frequency: r.frequency as never,
-      interval: r.interval,
-      startDate: r.startDate,
-      endDate: r.endDate,
-      occurrenceCount: r.occurrenceCount,
-    },
-    from,
-    to,
-  );
-}
-
 export interface DashboardData {
   accounts: AccountWithBalance[];
   netWorthMinor: number;
@@ -280,22 +256,24 @@ export interface DashboardData {
 }
 
 export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
+  const { user, dek } = await requireUser();
   const settings = await getSettings();
   const now = new Date();
   const monthStart = startOfMonth(now);
   const monthEnd = endOfMonth(now);
 
-  const [accounts, { result }, obligations, monthTx, last3] = await Promise.all([
+  const [accounts, { result }, obligations, rawMonthTx, rawLast3] = await Promise.all([
     getAccountsWithBalances(),
     getProjection({ horizonDays }),
     getUpcomingObligations(horizonDays),
+    prisma.transaction.findMany({ where: { userId: user.id, status: "posted", date: { gte: monthStart, lte: monthEnd } } }),
     prisma.transaction.findMany({
-      where: { status: "posted", date: { gte: monthStart, lte: monthEnd } },
-    }),
-    prisma.transaction.findMany({
-      where: { status: "posted", date: { gte: subMonths(now, 3) }, type: { in: ["income", "expense"] } },
+      where: { userId: user.id, status: "posted", date: { gte: subMonths(now, 3) }, type: { in: ["income", "expense"] } },
     }),
   ]);
+
+  const monthTx = rawMonthTx.map((t) => decryptTransaction(t, dek));
+  const last3 = rawLast3.map((t) => decryptTransaction(t, dek));
 
   const netWorthMinor = accounts.reduce((s, a) => s + a.balanceMinor, 0);
   const monthIncomeMinor = monthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amountMinor, 0);
@@ -333,18 +311,13 @@ export interface TransactionFilters {
 }
 
 export async function getTransactions(filters: TransactionFilters = {}) {
-  const where: Record<string, unknown> = { status: "posted" };
+  const { user, dek } = await requireUser();
+  const where: Record<string, unknown> = { userId: user.id, status: "posted" };
   if (filters.type) where.type = filters.type;
   if (filters.accountId) where.accountId = filters.accountId;
   if (filters.categoryId) where.categoryId = filters.categoryId;
   if (filters.from || filters.to) {
-    where.date = {
-      ...(filters.from ? { gte: filters.from } : {}),
-      ...(filters.to ? { lte: filters.to } : {}),
-    };
-  }
-  if (filters.search) {
-    where.note = { contains: filters.search };
+    where.date = { ...(filters.from ? { gte: filters.from } : {}), ...(filters.to ? { lte: filters.to } : {}) };
   }
 
   const rows = await prisma.transaction.findMany({
@@ -354,20 +327,30 @@ export async function getTransactions(filters: TransactionFilters = {}) {
     take: 500,
   });
 
-  const mapped = rows.map((t) => ({ ...t, tagList: parseTags(t.tags) }));
-  if (filters.tag) return mapped.filter((t) => t.tagList.includes(filters.tag!));
+  let mapped = rows.map((t) => decryptTransaction(t, dek));
+  // Note/tag search happens post-decryption (fields are encrypted at rest).
+  if (filters.search) {
+    const q = filters.search.toLowerCase();
+    mapped = mapped.filter((t) => (t.note ?? "").toLowerCase().includes(q));
+  }
+  if (filters.tag) mapped = mapped.filter((t) => t.tagList.includes(filters.tag!));
   return mapped;
 }
 
 export async function getCategories() {
-  return prisma.category.findMany({ orderBy: [{ kind: "asc" }, { sortOrder: "asc" }] });
+  const { user, dek } = await requireUser();
+  const rows = await prisma.category.findMany({ where: { userId: user.id }, orderBy: [{ kind: "asc" }, { sortOrder: "asc" }] });
+  return rows.map((c) => decryptCategory(c, dek));
 }
 
 export async function getRecurringRules() {
-  return prisma.recurringRule.findMany({
+  const { user, dek } = await requireUser();
+  const rows = await prisma.recurringRule.findMany({
+    where: { userId: user.id },
     include: { account: true, category: true },
     orderBy: { nextRunDate: "asc" },
   });
+  return rows.map((r) => decryptRecurring(r, dek));
 }
 
 // ── PDCs ──────────────────────────────────────────────────────────────────────
@@ -375,19 +358,15 @@ export async function getRecurringRules() {
 export interface PdcFilters {
   status?: string;
   direction?: string;
-  bankName?: string;
 }
 
 export async function getPdcs(filters: PdcFilters = {}) {
-  const where: Record<string, unknown> = {};
+  const { user, dek } = await requireUser();
+  const where: Record<string, unknown> = { userId: user.id };
   if (filters.status) where.status = filters.status;
   if (filters.direction) where.direction = filters.direction;
-  if (filters.bankName) where.bankName = filters.bankName;
-  return prisma.pDC.findMany({
-    where,
-    include: { account: true },
-    orderBy: { dueDate: "asc" },
-  });
+  const rows = await prisma.pDC.findMany({ where, include: { account: true }, orderBy: { dueDate: "asc" } });
+  return rows.map((p) => decryptPdc(p, dek));
 }
 
 // ── Provisions ────────────────────────────────────────────────────────────────
@@ -395,48 +374,46 @@ export async function getPdcs(filters: PdcFilters = {}) {
 export type ProvisionWithFunding = Awaited<ReturnType<typeof getProvisions>>[number];
 
 export async function getProvisions() {
+  const { user, dek } = await requireUser();
   const rows = await prisma.provision.findMany({
+    where: { userId: user.id },
     include: { allocations: true, account: true },
     orderBy: [{ status: "asc" }, { priority: "asc" }, { dueDate: "asc" }],
   });
   const now = new Date();
-  return rows.map((p) => {
+  return rows.map((raw) => {
+    const p = decryptProvision(raw, dek);
     const fundedMinor = p.allocations.reduce((s, a) => s + a.amountMinor, 0);
     const remainingMinor = Math.max(0, p.targetMinor - fundedMinor);
     const progress = p.targetMinor > 0 ? Math.min(1, fundedMinor / p.targetMinor) : 1;
     const monthsLeft = p.dueDate
       ? Math.max(0, (p.dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30.44))
       : null;
-    const suggestedMonthlyMinor =
-      monthsLeft && monthsLeft > 0 ? Math.ceil(remainingMinor / monthsLeft) : remainingMinor;
+    const suggestedMonthlyMinor = monthsLeft && monthsLeft > 0 ? Math.ceil(remainingMinor / monthsLeft) : remainingMinor;
     const onTrack = remainingMinor === 0 || (monthsLeft != null && monthsLeft >= 1);
-    return {
-      ...p,
-      fundedMinor,
-      remainingMinor,
-      progress,
-      monthsLeft,
-      suggestedMonthlyMinor,
-      onTrack,
-    };
+    return { ...p, fundedMinor, remainingMinor, progress, monthsLeft, suggestedMonthlyMinor, onTrack };
   });
 }
 
 // ── Budgets ───────────────────────────────────────────────────────────────────
 
 export async function getBudgets(month: string) {
-  const [budgets, categories] = await Promise.all([
-    prisma.budget.findMany({ where: { month }, include: { category: true } }),
-    prisma.category.findMany({ where: { kind: "expense" } }),
+  const { user, dek } = await requireUser();
+  const [rawBudgets, rawCategories] = await Promise.all([
+    prisma.budget.findMany({ where: { userId: user.id, month }, include: { category: true } }),
+    prisma.category.findMany({ where: { userId: user.id, kind: "expense" } }),
   ]);
   const [y, m] = month.split("-").map(Number);
   const from = new Date(y, m - 1, 1);
   const to = endOfMonth(from);
-  const tx = await prisma.transaction.findMany({
-    where: { status: "posted", type: "expense", date: { gte: from, lte: to } },
+  const rawTx = await prisma.transaction.findMany({
+    where: { userId: user.id, status: "posted", type: "expense", date: { gte: from, lte: to } },
   });
+  const budgets = rawBudgets.map((b) => decryptBudget(b, dek));
+  const categories = rawCategories.map((c) => decryptCategory(c, dek));
   const actualByCat = new Map<string, number>();
-  for (const t of tx) {
+  for (const raw of rawTx) {
+    const t = decryptTransaction(raw, dek);
     if (!t.categoryId) continue;
     actualByCat.set(t.categoryId, (actualByCat.get(t.categoryId) ?? 0) + t.amountMinor);
   }
@@ -457,19 +434,18 @@ export interface ReportData {
 }
 
 export async function getReportData(monthsBack = 6): Promise<ReportData> {
+  const { user, dek } = await requireUser();
   const settings = await getSettings();
   const now = new Date();
   const from = startOfMonth(subMonths(now, monthsBack - 1));
 
-  const [txs, categories] = await Promise.all([
-    prisma.transaction.findMany({
-      where: { status: "posted", type: { in: ["income", "expense"] }, date: { gte: from } },
-    }),
-    prisma.category.findMany(),
+  const [rawTxs, rawCategories] = await Promise.all([
+    prisma.transaction.findMany({ where: { userId: user.id, status: "posted", type: { in: ["income", "expense"] }, date: { gte: from } } }),
+    prisma.category.findMany({ where: { userId: user.id } }),
   ]);
+  const categories = rawCategories.map((c) => decryptCategory(c, dek));
   const catById = new Map(categories.map((c) => [c.id, c]));
 
-  // Monthly income vs expense buckets.
   const monthMap = new Map<string, { incomeMinor: number; expenseMinor: number }>();
   for (let i = 0; i < monthsBack; i++) {
     const d = startOfMonth(subMonths(now, monthsBack - 1 - i));
@@ -481,7 +457,8 @@ export async function getReportData(monthsBack = 6): Promise<ReportData> {
   let totalIncomeMinor = 0;
   let totalExpenseMinor = 0;
 
-  for (const t of txs) {
+  for (const raw of rawTxs) {
+    const t = decryptTransaction(raw, dek);
     const key = format(t.date, "yyyy-MM");
     const bucket = monthMap.get(key);
     if (t.type === "income") {
@@ -502,12 +479,10 @@ export async function getReportData(monthsBack = 6): Promise<ReportData> {
   const byCategory = [...catTotals.entries()]
     .map(([name, amountMinor]) => ({ name, color: colorByCat.get(name) ?? "#94a3b8", amountMinor }))
     .sort((a, b) => b.amountMinor - a.amountMinor);
-
   const topPayees = [...payeeTotals.entries()]
     .map(([name, v]) => ({ name, ...v }))
     .sort((a, b) => b.amountMinor - a.amountMinor)
     .slice(0, 8);
-
   const months = [...monthMap.entries()].map(([key, v]) => ({
     key,
     label: format(new Date(`${key}-01`), "MMM"),
@@ -528,8 +503,9 @@ export async function getReportData(monthsBack = 6): Promise<ReportData> {
   };
 }
 
-// ── Rates & settings ──────────────────────────────────────────────────────────
+// ── Rates ─────────────────────────────────────────────────────────────────────
 
 export async function getRates() {
-  return prisma.exchangeRate.findMany({ orderBy: [{ base: "asc" }, { quote: "asc" }] });
+  const { user } = await requireUser();
+  return prisma.exchangeRate.findMany({ where: { userId: user.id }, orderBy: [{ base: "asc" }, { quote: "asc" }] });
 }

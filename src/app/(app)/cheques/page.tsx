@@ -24,7 +24,7 @@ export default async function ChequesPage() {
     status: p.status,
     notes: p.notes,
     accountId: p.accountId,
-    accountName: p.account.name,
+    accountName: p.account?.name ?? "",
   }));
 
   const accountsLite: AccountLite[] = accounts.map((a) => ({

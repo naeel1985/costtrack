@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { format } from "date-fns";
-import { exportAllJson, transactionsToCsv } from "@/server/io";
+import { getAuth } from "@/server/auth";
+import { exportUserJson, transactionsToCsv } from "@/server/io";
 
 export async function GET(req: NextRequest) {
+  const auth = await getAuth();
+  if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const kind = req.nextUrl.searchParams.get("format") ?? "json";
   const stamp = format(new Date(), "yyyy-MM-dd");
 
   if (kind === "csv") {
-    const csv = await transactionsToCsv();
+    const csv = await transactionsToCsv(auth.user.id, auth.dek);
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
@@ -16,7 +20,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const data = await exportAllJson();
+  const data = await exportUserJson(auth.user.id, auth.dek);
   return new NextResponse(JSON.stringify(data, null, 2), {
     headers: {
       "Content-Type": "application/json",

@@ -47,3 +47,11 @@ next-env.d.ts
 prisma/dev.db*
 
 dev.log
+
+# Auth/dev
+dev-outbox/
+.env.local
+
+# pglite verification DB
+.pglite-data/
+pglite.log

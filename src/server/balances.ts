@@ -1,11 +1,19 @@
 // Pure balance folding — shared by queries and the projection assembler.
-// Kept separate from Prisma so it can be reasoned about (and reused) easily.
-
-import type { Transaction } from "@prisma/client";
+// Operates on already-decrypted transaction shapes (plain numbers), so it never
+// touches Prisma or ciphertext.
 
 export interface BalanceAccount {
   id: string;
   openingBalanceMinor: number;
+}
+
+export interface BalanceTx {
+  type: string;
+  amountMinor: number;
+  accountId: string;
+  transferAccountId: string | null;
+  date: Date;
+  status: string;
 }
 
 /**
@@ -15,10 +23,7 @@ export interface BalanceAccount {
  */
 export function computeBalances(
   accounts: BalanceAccount[],
-  transactions: Pick<
-    Transaction,
-    "type" | "amountMinor" | "accountId" | "transferAccountId" | "date" | "status"
-  >[],
+  transactions: BalanceTx[],
   asOf?: Date,
 ): Record<string, number> {
   const balances: Record<string, number> = {};

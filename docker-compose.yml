@@ -1,0 +1,24 @@
+# One-command local Postgres for Cashflow.
+#   docker compose up -d
+# Then:  npm run db:migrate && npm run db:seed
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: cashflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cashflow
+      POSTGRES_PASSWORD: cashflow_dev_pw
+      POSTGRES_DB: cashflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - cashflow-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cashflow -d cashflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  cashflow-pgdata:

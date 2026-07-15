@@ -87,6 +87,53 @@ Running log of the meaningful choices made while building Cashflow, and why.
 - **Safety buffer per account** with dedicated buffer-breach warnings.
 - **Full CSV/JSON import & export** so the user is never locked in.
 
+## Multi-user, auth & encryption (v2)
+
+The app went from single-user local-first to a secure multi-tenant app. Key
+decisions:
+
+- **PostgreSQL** via Prisma (`provider = "postgresql"`). A `docker-compose.yml`
+  brings up Postgres in one command; `DATABASE_URL` is the only knob. Where no
+  Postgres/Docker is available, `npm run db:embedded` starts an in-process
+  Postgres-wire server (PGlite) for local verification — the same schema and SQL.
+- **Custom auth, not a library.** Full control over the exact requirements
+  (username *or* email login, email-verification gate, login-attempt telemetry).
+  Passwords are hashed with **scrypt** (memory-hard) + random per-password salt,
+  compared in constant time. Sessions are **opaque server-side tokens**: the
+  cookie holds a random token, the DB stores only its SHA-256, cookie is
+  `httpOnly` + `SameSite=Lax` + `Secure` in prod. Sessions are revocable.
+- **Zero-knowledge-from-admin encryption.** Each user has a random 256-bit
+  **Data Encryption Key (DEK)**. The DEK is wrapped by a key **derived from the
+  user's password** (scrypt). On login the DEK is unwrapped and re-sealed with a
+  server key (`SERVER_KEY`) onto the session row, so an active request can
+  decrypt without re-deriving from the password. All financial fields (amounts,
+  names, notes, counterparties, cheque numbers…) are stored **AES-256-GCM**
+  encrypted with a **random IV per record** (the "salt") + auth tag. Result: no
+  other user, no admin, and nobody with a raw DB dump can read a user's data
+  without that user's password. Verified end-to-end (`scripts/verify-auth.ts`):
+  a user decrypts their own rows; the admin's DEK throws on the same ciphertext.
+  - **Trade-off:** because the DEK is only recoverable from the password, a
+    forgotten-password *reset* would orphan existing data. We therefore ship
+    email *verification* (required) but **not** password reset — the honest price
+    of the zero-knowledge property. Identity fields (email, phone, full name) are
+    stored plaintext on purpose: the admin is explicitly allowed to see them.
+- **Admin sees telemetry, never data.** The admin console queries only identity
+  + auth tables (users, verified-email, phone, login attempts). It never selects
+  financial columns and holds no DEK, so user data is cryptographically out of
+  reach. A non-admin hitting `/admin` gets a 404 (the route isn't even confirmed).
+- **Defence in depth.** (1) Edge `proxy.ts` bounces cookie-less requests to
+  `/login`; (2) the `(app)` layout runs `requireUser()`; (3) every query &
+  mutation is scoped by `userId` and re-checks row ownership (`updateMany`/
+  `deleteMany` with `{ id, userId }`, `assertOwnsAccounts`); (4) all mutations are
+  Zod-validated; (5) login lockout after N failures; (6) security headers + CSP,
+  `poweredByHeader` off. Even if tenant scoping were bypassed, the data is still
+  encrypted to a key the attacker doesn't have.
+- **Routing.** Authenticated app lives under the `(app)` route group (guarded
+  layout + shell); auth screens under `(auth)` (bare layout). URLs are unchanged.
+- **Seeding.** `npm run db:seed` upserts the **admin** from env
+  (`ADMIN_USERNAME/PASSWORD/EMAIL`) and creates a **verified demo user**
+  (`demo@cashflow.local` / `DemoPass123!`) with the encrypted AED sample data.
+
 ## Deferred (sensible next steps, intentionally out of scope for now)
 
 - Optional PIN gate (schema field `AppSetting.pinHash` exists; no UI yet).

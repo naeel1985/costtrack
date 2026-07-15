@@ -25,18 +25,45 @@ rate table (no external API).
 
 ## Quick start
 
+The app is multi-user and stores data in **PostgreSQL**.
+
 ```bash
 npm install
-npm run db:migrate      # create the SQLite schema (prisma/dev.db)
-npm run db:seed         # realistic AED sample data
-npm run dev             # http://localhost:3000
+cp .env.example .env       # then fill in the secrets (see below)
+docker compose up -d       # local Postgres on :5432 (matches .env)
+npm run db:migrate         # create the schema
+npm run db:seed            # admin (from .env) + a verified demo user
+npm run dev                # http://localhost:3000
 ```
 
-Already migrated and just want fresh sample data:
+Sign in with the seeded **demo** account, or register your own (you'll get an
+email-verification link — see *Email* below):
 
-```bash
-npm run db:reset        # drops, re-migrates, and re-seeds
+- **Demo user:** `demo@cashflow.local` / `DemoPass123!` (verified, has sample data)
+- **Admin:** the `ADMIN_USERNAME` / `ADMIN_PASSWORD` from your `.env`
+
+> **No Docker/Postgres?** You can verify the whole app against an in-process
+> Postgres-wire server (PGlite): run `npm run db:embedded` in one terminal, set
+> `DATABASE_URL="postgresql://cashflow:cashflow_dev_pw@localhost:5432/cashflow?schema=public&pgbouncer=true&connection_limit=1"`,
+> then `npm run db:migrate && npm run db:seed && npm run dev`.
+
+### Required secrets (`.env`)
+
 ```
+DATABASE_URL   # Postgres connection string (docker-compose provides one)
+SERVER_KEY     # base64 32-byte key — seals the per-session DEK
+SESSION_SECRET # base64 32-byte key
+ADMIN_USERNAME / ADMIN_PASSWORD / ADMIN_EMAIL   # bootstrap admin (seeded)
+SMTP_*         # optional; without it, verification emails go to ./dev-outbox
+```
+
+Generate a key: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`
+
+### Email verification
+
+Registration requires email verification before sign-in. If SMTP isn't
+configured, the verification link is written to **`./dev-outbox/`** and printed
+to the console, so the flow is fully testable locally.
 
 ### Scripts
 
@@ -44,12 +71,13 @@ npm run db:reset        # drops, re-migrates, and re-seeds
 | --- | --- |
 | `npm run dev` | Start the app (Next.js dev server) |
 | `npm run build` / `npm start` | Production build / serve |
-| `npm test` | Run the projection-engine unit tests (Vitest) |
+| `npm test` | Unit tests — projection engine **and** crypto (Vitest) |
 | `npm run db:migrate` | Apply Prisma migrations |
-| `npm run db:seed` | Seed realistic AED data |
-| `npm run db:clear` | Empty all data (keep schema) — see the app's empty states |
+| `npm run db:seed` | Seed admin (from env) + verified demo user |
+| `npm run db:clear` | Empty ALL data (keep schema) — see empty states |
 | `npm run db:reset` | Reset + re-seed the database |
 | `npm run db:studio` | Open Prisma Studio |
+| `npm run db:embedded` | Start an in-process Postgres (PGlite) for local dev |
 
 ---
 
@@ -58,8 +86,10 @@ npm run db:reset        # drops, re-migrates, and re-seeds
 - **Next.js (App Router) + TypeScript** — Server Components for data, Server
   Actions for mutations
 - **Tailwind CSS v4 + shadcn-style UI** (Radix primitives)
-- **Prisma ORM + SQLite** — zero-config local persistence; the DB layer is
-  isolated so swapping to Postgres is a datasource change, not a rewrite
+- **Prisma ORM + PostgreSQL** — the DB layer is isolated in `src/server/` so all
+  access is centralised and per-user scoped
+- **Custom auth + per-user AES-256-GCM encryption** (Node `crypto`, scrypt) —
+  see *Security* below
 - **Recharts** for charts, **date-fns** for date math, **Zod** for validation,
   **react-hook-form** for forms, **Vitest** for tests
 
@@ -125,6 +155,34 @@ deleting the cheque unwinds that transaction.
   dark mode, mobile-first responsive layout (daily phone use is first-class).
 
 See [DECISIONS.md](DECISIONS.md) for the design rationale and trade-offs.
+
+---
+
+## Security & multi-user
+
+Every user's financial data is **encrypted at rest and unreadable by anyone but
+its owner — including the administrator.**
+
+- **Accounts:** register (full name, username, email, password, optional phone)
+  → verify email → sign in. Passwords are hashed with **scrypt**; sessions are
+  opaque, DB-backed, `httpOnly` cookies (only the token's hash is stored).
+- **Encryption:** each user has a random **Data Encryption Key (DEK)** wrapped by
+  a key derived from their password. Financial fields are stored as **AES-256-GCM
+  ciphertext with a random per-record IV** (salt) + auth tag. The admin holds no
+  DEK, so user data is cryptographically inaccessible to them.
+- **Isolation:** every query and mutation is scoped by `userId` with row-level
+  ownership checks; all mutations are Zod-validated.
+- **Admin console** (`/admin`, admins only): registered users, verified-email
+  status, phone, and **login attempts** — never any financial data.
+- **Hardening:** edge auth gate (`src/proxy.ts`), guarded `(app)` layout, login
+  lockout after repeated failures, security headers + CSP, `poweredByHeader` off.
+
+Verify the model yourself against a running DB:
+
+```bash
+npx tsx scripts/verify-auth.ts
+# → demo decrypts its own data; the admin's key CANNOT; data at rest is ciphertext
+```
 
 ---
 

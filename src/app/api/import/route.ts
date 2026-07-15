@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { importAllJson, importTransactionsCsv } from "@/server/io";
+import { getAuth } from "@/server/auth";
+import { importUserJson, importTransactionsCsv } from "@/server/io";
 
 export async function POST(req: NextRequest) {
+  const auth = await getAuth();
+  if (!auth) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+
   try {
     const form = await req.formData();
     const file = form.get("file");
@@ -13,13 +17,13 @@ export async function POST(req: NextRequest) {
     const text = await file.text();
 
     if (mode === "csv") {
-      const { imported } = await importTransactionsCsv(text);
+      const { imported } = await importTransactionsCsv(auth.user.id, auth.dek, text);
       revalidatePath("/", "layout");
       return NextResponse.json({ ok: true, imported });
     }
 
     const data = JSON.parse(text);
-    await importAllJson(data);
+    await importUserJson(auth.user.id, auth.dek, data);
     revalidatePath("/", "layout");
     return NextResponse.json({ ok: true });
   } catch (e) {
