@@ -15,6 +15,11 @@
 
 generator client {
   provider = "prisma-client-js"
+  // `native` = the machine that runs `prisma generate` (so the postinstall on
+  // cPanel produces the right engine). The extra target is a fallback for
+  // CloudLinux/AlmaLinux (OpenSSL 3). If your host uses OpenSSL 1.1 use
+  // "rhel-openssl-1.1.x", or Debian/Ubuntu -> "debian-openssl-3.0.x".
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
