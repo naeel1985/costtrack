@@ -8,10 +8,15 @@ set up any database on cPanel.
 
 - **`server.js`** — the Passenger startup file. cPanel runs this directly; it
   boots Next.js in production and listens on `process.env.PORT` (Passenger binds it).
-- **`build: "prisma generate && next build"`** in `package.json` — the Prisma
-  client is generated as part of the build (which runs in the app root, where the
-  schema lives). Note: cPanel runs `npm install` in the venv lib folder that has
-  no `prisma/` dir, so generation must **not** be a `postinstall` hook.
+- **`build: "prisma generate && next build --webpack"`** in `package.json` — the
+  Prisma client is generated as part of the build (which runs in the app root,
+  where the schema lives). Note: cPanel runs `npm install` in the venv lib folder
+  that has no `prisma/` dir, so generation must **not** be a `postinstall` hook.
+  `--webpack` is required because cPanel symlinks `node_modules` into the Node
+  virtualenv (outside the project), and Next 16's default **Turbopack** builder
+  refuses to follow a symlink that leaves the project root (it panics with
+  "Symlink node_modules … points out of the filesystem root"). Webpack resolves
+  symlinks normally.
 - **Prisma `binaryTargets`** now include a Linux engine (`rhel-openssl-3.0.x`, the
   usual CloudLinux/AlmaLinux target) plus `native`.
 
