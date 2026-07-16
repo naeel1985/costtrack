@@ -92,8 +92,11 @@ Nothing else changes — the app is the same.
 - **Prisma engine error** (e.g. "…rhel-openssl-1.1.x…"): your host uses a different
   OpenSSL. Edit `binaryTargets` in `prisma/schema.prisma` to the reported target
   (e.g. `rhel-openssl-1.1.x` or `debian-openssl-3.0.x`), re-`npm install`, rebuild.
-- **Dev dependencies for build:** `npm run build` needs the devDependencies
-  (TypeScript, Tailwind). cPanel's *Run NPM Install* installs them by default; if
-  you customized it to omit dev deps, build locally and upload `.next` instead.
+- **Build packages live in `dependencies`.** In Production mode cPanel sets
+  `NODE_ENV=production`, so `npm install` omits `devDependencies`. The packages the
+  build needs (Tailwind/PostCSS, TypeScript, `@types/*`) are therefore kept in
+  `dependencies` so they install regardless. (ESLint stays a dev tool — Next 16
+  doesn't lint during `build`.) After pulling these changes, re-run **Run NPM
+  Install** so the promoted packages land, then `npm run build`.
 - **Outbound network:** the server must reach Neon (`*.neon.tech:5432`) and Gmail
   (`smtp.gmail.com:465`). These are open on most cPanel hosts.
