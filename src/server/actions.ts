@@ -34,7 +34,7 @@ function fail(error: unknown): ActionResult {
 }
 
 function revalidateAll() {
-  for (const p of ["/", "/income", "/costs", "/cheques", "/provisions", "/reports", "/accounts", "/settings"]) {
+  for (const p of ["/dashboard", "/income", "/costs", "/cheques", "/provisions", "/reports", "/accounts", "/settings"]) {
     revalidatePath(p);
   }
 }

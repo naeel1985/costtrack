@@ -3,7 +3,9 @@ import { NextResponse, type NextRequest } from "next/server";
 // Coarse, fast auth gate at the edge: if there's no session cookie, bounce
 // protected routes to /login before any server component runs. Full validation
 // (session lookup, expiry, DEK) happens in the (app) layout via requireUser().
-const PUBLIC = ["/login", "/register", "/verify", "/verify-email"];
+// `/` (marketing home) and `/packages` (pricing) are the public commercial
+// front door; the rest of the public list is the auth flow.
+const PUBLIC = ["/", "/packages", "/login", "/register", "/verify", "/verify-email"];
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

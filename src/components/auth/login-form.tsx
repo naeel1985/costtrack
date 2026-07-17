@@ -22,7 +22,7 @@ export function LoginForm() {
       const res = await loginUser(values);
       if (res.ok) {
         toast.success("Welcome back");
-        router.push("/");
+        router.push("/dashboard");
         router.refresh();
       } else {
         setNeedsVerify(/verify your email/i.test(res.error));

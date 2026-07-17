@@ -116,7 +116,7 @@ export function AppInteractive({
             </CommandItem>
           </CommandGroup>
           <CommandGroup heading="Go to">
-            <CommandItem onSelect={() => go("/")}>
+            <CommandItem onSelect={() => go("/dashboard")}>
               <LayoutDashboard /> Dashboard
             </CommandItem>
             <CommandItem onSelect={() => go("/income")}>

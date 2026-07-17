@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 function isActive(pathname: string, href: string) {
-  if (href === "/") return pathname === "/";
+  if (href === "/dashboard") return pathname === "/dashboard";
   return pathname.startsWith(href);
 }
 

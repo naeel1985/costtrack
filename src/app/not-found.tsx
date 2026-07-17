@@ -13,7 +13,7 @@ export default function NotFound() {
         That page doesn&apos;t exist. Let&apos;s get you back on track.
       </p>
       <Button asChild className="mt-2">
-        <Link href="/">Back to dashboard</Link>
+        <Link href="/dashboard">Back to dashboard</Link>
       </Button>
     </div>
   );
