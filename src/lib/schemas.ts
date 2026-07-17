@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   ACCOUNT_TYPES,
   CATEGORY_KINDS,
+  EXPENSE_METHODS,
   PDC_DIRECTIONS,
   PDC_STATUSES,
   RECURRENCE_FREQUENCIES,
@@ -44,14 +45,21 @@ export const transactionSchema = z
   .object({
     id: z.string().optional(),
     type: z.enum(TRANSACTION_TYPES),
+    // Payment method for expenses; ignored (forced to "account") otherwise.
+    method: z.enum(EXPENSE_METHODS).default("account"),
     amount,
     currency,
     date: z.coerce.date(),
-    accountId: z.string().min(1, "Choose an account"),
+    // Optional: credit-card costs resolve their account server-side.
+    accountId: z.string().optional().nullable(),
     transferAccountId: z.string().optional().nullable(),
     categoryId: z.string().optional().nullable(),
     note: z.string().max(280).optional().nullable(),
     tags: z.array(z.string()).default([]),
+  })
+  .refine((d) => d.type === "expense" && d.method === "credit_card" ? true : !!d.accountId, {
+    message: "Choose an account",
+    path: ["accountId"],
   })
   .refine((d) => d.type !== "transfer" || !!d.transferAccountId, {
     message: "Choose a destination account for the transfer",

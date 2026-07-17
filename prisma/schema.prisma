@@ -134,6 +134,10 @@ model Account {
   safetyBufferEnc   String // encrypted minor units
   color             String   @default("#64748b")
   isArchived        Boolean  @default(false)
+  // Auto-managed accounts the user never creates directly — currently the
+  // credit-card liability that credit-card costs post to. Excluded from
+  // "free savings" (it represents debt, not cash).
+  isSystem          Boolean  @default(false)
   sortOrder         Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -179,6 +183,9 @@ model Transaction {
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   type              String // income | expense | transfer
+  // How an expense was paid: account | debit_card | credit_card (plaintext —
+  // low-sensitivity, and needed to filter the Costs sections without decrypting).
+  method            String   @default("account")
   amountEnc         String // encrypted minor units
   currency          String   @default("AED")
   date              DateTime
@@ -208,6 +215,7 @@ model Transaction {
   @@index([userId, accountId, date])
   @@index([userId, type])
   @@index([userId, status])
+  @@index([userId, method])
 }
 
 model RecurringRule {

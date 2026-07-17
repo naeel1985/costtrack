@@ -7,6 +7,8 @@ export interface AccountLite {
   type: string;
   currency: string;
   color: string;
+  /** Auto-managed accounts (e.g. the credit-card liability) — hidden from pickers. */
+  isSystem?: boolean;
 }
 
 export interface CategoryLite {

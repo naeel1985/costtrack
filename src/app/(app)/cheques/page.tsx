@@ -33,6 +33,7 @@ export default async function ChequesPage() {
     type: a.type,
     currency: a.currency,
     color: a.color,
+    isSystem: a.isSystem,
   }));
   const categoriesLite: CategoryLite[] = categories.map((c) => ({
     id: c.id,

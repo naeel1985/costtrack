@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/shared";
 import { AddTransactionButton } from "@/components/add-transaction-button";
 import { TransactionsView, type TxRow } from "@/components/transactions/transactions-view";
 import { RecurringSection, type RecurringRow } from "@/components/transactions/recurring-section";
+import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
@@ -19,6 +20,7 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
     type: a.type,
     currency: a.currency,
     color: a.color,
+    isSystem: a.isSystem,
   }));
   const categoriesLite: CategoryLite[] = categories.map((c) => ({
     id: c.id,
@@ -31,6 +33,7 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
   const rows: TxRow[] = txs.map((t) => ({
     id: t.id,
     type: t.type,
+    method: t.method,
     amountMinor: t.amountMinor,
     currency: t.currency,
     date: t.date,
@@ -65,6 +68,18 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
 
   const isIncome = kind === "income";
 
+  // Cards are liabilities, not spendable accounts — keep the two pools apart.
+  const assetAccounts = accountsLite.filter((a) => a.type !== "credit_card" && !a.isSystem);
+  const baseCurrency = assetAccounts[0]?.currency ?? "AED";
+
+  // A card's balance is negative; what's owed is its magnitude.
+  const cards = accounts
+    .filter((a) => a.type === "credit_card")
+    .map((a) => ({ id: a.id, name: a.name, owedMinor: Math.max(0, -a.balanceMinor) }));
+
+  const creditRows = rows.filter((r) => r.method === "credit_card");
+  const debitRows = rows.filter((r) => r.method === "debit_card");
+
   return (
     <div className="space-y-7">
       <PageHeader
@@ -76,6 +91,24 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
         }
         action={<AddTransactionButton txType={kind} label={isIncome ? "Add income" : "Add cost"} size="sm" />}
       />
+
+      {!isIncome && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <CreditCardSection
+            rows={creditRows}
+            cards={cards}
+            currency={baseCurrency}
+            assetAccounts={assetAccounts}
+            categories={categoriesLite}
+          />
+          <DebitCardSection
+            rows={debitRows}
+            currency={baseCurrency}
+            accounts={assetAccounts}
+            categories={categoriesLite}
+          />
+        </div>
+      )}
 
       <TransactionsView rows={rows} accounts={accountsLite} categories={categoriesLite} kind={kind} />
 

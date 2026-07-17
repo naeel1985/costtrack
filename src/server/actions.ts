@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { toMinor } from "@/lib/money";
 import { expandRecurrence } from "@/lib/projection";
 import { requireUser } from "@/server/auth";
+import { CREDIT_CARD_ACCOUNT_NAME } from "@/lib/domain";
 import { decryptPdc, decryptProvision, decryptRecurring, encInt, encNull, encStr } from "@/server/crypto-map";
 import {
   accountSchema,
@@ -51,6 +52,44 @@ async function assertOwnsCategory(userId: string, categoryId: string | null | un
   if (!categoryId) return;
   const found = await prisma.category.count({ where: { userId, id: categoryId } });
   if (!found) throw new Error("Category not found");
+}
+
+/**
+ * Resolve which credit card a cost/payment belongs to. Users can keep several
+ * cards (each an Account of type `credit_card`, whose negative balance is the
+ * amount owed). If they haven't set one up yet we create a default on first
+ * use, so the zero-config path still works.
+ */
+async function resolveCreditCardAccount(
+  userId: string,
+  dek: Buffer,
+  cardId?: string | null,
+): Promise<string> {
+  if (cardId) {
+    const chosen = await prisma.account.findFirst({
+      where: { id: cardId, userId, type: "credit_card" },
+    });
+    if (!chosen) throw new Error("Credit card not found");
+    return chosen.id;
+  }
+  const existing = await prisma.account.findFirst({
+    where: { userId, type: "credit_card", isArchived: false },
+    orderBy: [{ isSystem: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  if (existing) return existing.id;
+  const created = await prisma.account.create({
+    data: {
+      userId,
+      nameEnc: encStr(CREDIT_CARD_ACCOUNT_NAME, dek),
+      type: "credit_card",
+      currency: "AED",
+      openingBalanceEnc: encInt(0, dek),
+      safetyBufferEnc: encInt(0, dek),
+      color: "#7c3aed",
+      isSystem: true,
+    },
+  });
+  return created.id;
 }
 
 function computeNextRunDate(rule: {
@@ -177,15 +216,27 @@ export async function saveTransaction(input: unknown): Promise<ActionResult> {
   try {
     const { user, dek } = await requireUser();
     const data = transactionSchema.parse(input);
-    await assertOwnsAccounts(user.id, [data.accountId, data.transferAccountId]);
+
+    // Method only applies to expenses. A credit-card cost posts to the chosen
+    // card's liability account (or a default created on demand); everything
+    // else posts to the account the user picked.
+    const method = data.type === "expense" ? data.method : "account";
+    const accountId =
+      data.type === "expense" && method === "credit_card"
+        ? await resolveCreditCardAccount(user.id, dek, data.accountId)
+        : data.accountId ?? null;
+    if (!accountId) return { ok: false, error: "Choose an account" };
+
+    await assertOwnsAccounts(user.id, [accountId, data.transferAccountId]);
     await assertOwnsCategory(user.id, data.type === "transfer" ? null : data.categoryId);
 
     const payload = {
       type: data.type,
+      method,
       amountEnc: encInt(toMinor(data.amount, data.currency), dek),
       currency: data.currency,
       date: data.date,
-      accountId: data.accountId,
+      accountId,
       transferAccountId: data.type === "transfer" ? data.transferAccountId || null : null,
       categoryId: data.type === "transfer" ? null : data.categoryId || null,
       noteEnc: encNull(data.note, dek),
@@ -211,6 +262,49 @@ export async function deleteTransaction(id: string): Promise<ActionResult> {
     const { user } = await requireUser();
     const res = await prisma.transaction.deleteMany({ where: { id, userId: user.id } });
     if (res.count === 0) return { ok: false, error: "Transaction not found" };
+    revalidateAll();
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+const creditCardPaymentSchema = z.object({
+  fromAccountId: z.string().min(1, "Choose a funding account"),
+  /** Which card to pay down; defaults to the user's first/only card. */
+  cardId: z.string().optional().nullable(),
+  amount: z.coerce.number().finite().positive("Enter an amount"),
+  currency: z.string().min(1).max(8).default("AED"),
+  date: z.coerce.date().default(() => new Date()),
+  note: z.string().max(280).optional().nullable(),
+});
+
+/**
+ * Pay down a credit card: a transfer from a funding (asset) account into the
+ * card's account, which raises its balance back toward zero.
+ */
+export async function recordCreditCardPayment(input: unknown): Promise<ActionResult> {
+  try {
+    const { user, dek } = await requireUser();
+    const data = creditCardPaymentSchema.parse(input);
+    const ccId = await resolveCreditCardAccount(user.id, dek, data.cardId);
+    if (data.fromAccountId === ccId) return { ok: false, error: "Choose a funding account" };
+    await assertOwnsAccounts(user.id, [data.fromAccountId]);
+    await prisma.transaction.create({
+      data: {
+        userId: user.id,
+        type: "transfer",
+        method: "account",
+        amountEnc: encInt(toMinor(data.amount, data.currency), dek),
+        currency: data.currency,
+        date: data.date,
+        accountId: data.fromAccountId,
+        transferAccountId: ccId,
+        noteEnc: encNull(data.note ?? "Credit card payment", dek),
+        tagsEnc: encStr("[]", dek),
+        status: "posted",
+      },
+    });
     revalidateAll();
     return { ok: true };
   } catch (e) {

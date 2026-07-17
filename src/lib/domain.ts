@@ -18,6 +18,23 @@ export type CategoryKind = (typeof CATEGORY_KINDS)[number];
 export const TRANSACTION_TYPES = ["income", "expense", "transfer"] as const;
 export type TransactionType = (typeof TRANSACTION_TYPES)[number];
 
+// How an expense was paid. `account` = plain cash/bank spend (the default, also
+// used by income/transfers). `debit_card` = drawn from a linked asset account.
+// `credit_card` = added as a cost against the user's credit-card liability (it
+// accumulates as "owed" and never touches a cash account until a payment).
+export const EXPENSE_METHODS = ["account", "debit_card", "credit_card"] as const;
+export type ExpenseMethod = (typeof EXPENSE_METHODS)[number];
+
+export const EXPENSE_METHOD_LABELS: Record<ExpenseMethod, string> = {
+  account: "Cash / bank",
+  debit_card: "Debit card",
+  credit_card: "Credit card",
+};
+
+// The single auto-managed credit-card liability account per user. Credit-card
+// costs post here; its (negative) balance is the amount owed.
+export const CREDIT_CARD_ACCOUNT_NAME = "Credit Card";
+
 export const TRANSACTION_STATUSES = ["posted", "scheduled"] as const;
 export type TransactionStatus = (typeof TRANSACTION_STATUSES)[number];
 

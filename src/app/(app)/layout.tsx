@@ -13,6 +13,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     type: a.type,
     currency: a.currency,
     color: a.color,
+    isSystem: a.isSystem,
   }));
   const categoriesLite = categories.map((c) => ({
     id: c.id,

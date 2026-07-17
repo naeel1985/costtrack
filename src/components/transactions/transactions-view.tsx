@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 export interface TxRow {
   id: string;
   type: string;
+  method?: string;
   amountMinor: number;
   currency: string;
   date: Date;

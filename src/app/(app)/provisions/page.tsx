@@ -40,6 +40,7 @@ export default async function ProvisionsPage() {
     type: a.type,
     currency: a.currency,
     color: a.color,
+    isSystem: a.isSystem,
   }));
 
   return <ProvisionsView provisions={cards} accounts={accountsLite} />;
