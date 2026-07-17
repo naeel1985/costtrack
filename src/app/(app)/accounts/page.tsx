@@ -19,6 +19,7 @@ export default async function AccountsPage() {
     safetyBufferMinor: a.safetyBufferMinor,
     color: a.color,
     isArchived: a.isArchived,
+    dueDay: a.dueDay,
   }));
 
   return <AccountsView accounts={rows} baseCurrency={settings.baseCurrency} />;

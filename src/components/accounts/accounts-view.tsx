@@ -36,6 +36,8 @@ export interface AccountRow {
   balanceMinor: number;
   openingBalanceMinor: number;
   safetyBufferMinor: number;
+  /** Credit cards only: day of the month the bill falls due. */
+  dueDay?: number | null;
   color: string;
   isArchived: boolean;
 }
@@ -120,6 +122,7 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
                           openingBalanceMinor: a.openingBalanceMinor,
                           safetyBufferMinor: a.safetyBufferMinor,
                           color: a.color,
+                          dueDay: a.dueDay,
                         });
                         setOpen(true);
                       }}

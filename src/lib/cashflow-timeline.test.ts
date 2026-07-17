@@ -88,6 +88,32 @@ describe("buildCashflowTimeline — daily free savings", () => {
     expect(t.daily.at(-1)!.freeSavingsMinor).toBe(aed(24_000)); // carries to the end
   });
 
+  it("tracks cumulative income and known costs alongside free savings", () => {
+    const t = buildCashflowTimeline({
+      ...base,
+      months: 3,
+      incomeEvents: [{ date: d("2026-07-25"), amountMinor: aed(20_000) }],
+      costEvents: [
+        { date: d("2026-07-20"), amountMinor: aed(6_000) },
+        { date: d("2026-08-05"), amountMinor: aed(1_000) },
+      ],
+    });
+    const at = (iso: string) => t.daily.find((p) => p.t === d(iso).getTime())!;
+    expect(at("2026-07-19")).toMatchObject({ cumIncomeMinor: 0, cumCostsMinor: 0 });
+    expect(at("2026-07-20")).toMatchObject({ cumIncomeMinor: 0, cumCostsMinor: aed(6_000) });
+    expect(at("2026-07-25")).toMatchObject({
+      cumIncomeMinor: aed(20_000),
+      cumCostsMinor: aed(6_000),
+    });
+    expect(at("2026-08-05")).toMatchObject({
+      cumIncomeMinor: aed(20_000),
+      cumCostsMinor: aed(7_000),
+    });
+    // free savings stays the identity: savings + income − costs
+    const p = at("2026-08-05");
+    expect(p.freeSavingsMinor).toBe(aed(10_000) + p.cumIncomeMinor - p.cumCostsMinor);
+  });
+
   it("can go negative when costs outrun savings and income", () => {
     const t = buildCashflowTimeline({
       ...base,

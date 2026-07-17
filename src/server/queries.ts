@@ -44,6 +44,7 @@ import {
   type SalaryPeriodResult,
 } from "@/lib/salary-period";
 import { buildCashflowTimeline, type CashflowTimeline } from "@/lib/cashflow-timeline";
+import { cardCycleCosts } from "@/lib/card-cycle";
 
 /** The dashboard always builds a full year so any date in it can be inspected. */
 export const TIMELINE_MONTHS = 12;
@@ -314,6 +315,33 @@ async function loadForwardView(
 
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
 
+  // Credit-card bills: costs charged between two due dates form one statement,
+  // payable on the closing due date — that's when cash actually leaves. Card
+  // expenses are NOT counted directly (they'd double-count against the bill).
+  const cards = accounts.filter((a) => a.type === "credit_card" && a.dueDay != null);
+  const cardCostEvents: DatedAmount[] = [];
+  if (cards.length > 0) {
+    const rawCardTx = await prisma.transaction.findMany({
+      where: { userId, type: "expense", accountId: { in: cards.map((c) => c.id) } },
+    });
+    const cardTx = rawCardTx.map((t) => decryptTransaction(t, dek));
+    for (const card of cards) {
+      cardCostEvents.push(
+        ...cardCycleCosts(
+          {
+            dueDay: card.dueDay!,
+            owedMinor: Math.max(0, -card.balanceMinor),
+            costs: cardTx
+              .filter((t) => t.accountId === card.id)
+              .map((t) => ({ date: t.date, amountMinor: t.amountMinor })),
+          },
+          today,
+          windowEnd,
+        ),
+      );
+    }
+  }
+
   // Free savings base = liquid asset accounts (never a credit-card liability).
   const savingsMinor = accounts
     .filter((a) => !a.isSystem && a.type !== "credit_card")
@@ -336,9 +364,10 @@ async function loadForwardView(
     .filter((r) => r.type === "income")
     .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
 
-  // Committed costs: recurring costs, scheduled spend, issued cheques due, and
-  // the unfunded remainder of provisions that carry a due date.
-  const costEvents: DatedAmount[] = [];
+  // Committed costs: recurring costs, scheduled spend, issued cheques due, the
+  // unfunded remainder of provisions that carry a due date, and credit-card
+  // bills on their due dates.
+  const costEvents: DatedAmount[] = [...cardCostEvents];
   for (const r of rules.filter((r) => r.type === "expense")) {
     for (const date of expand(r)) costEvents.push({ date, amountMinor: r.amountMinor });
   }

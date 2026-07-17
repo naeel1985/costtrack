@@ -138,6 +138,10 @@ model Account {
   // credit-card liability that credit-card costs post to. Excluded from
   // "free savings" (it represents debt, not cash).
   isSystem          Boolean  @default(false)
+  // Credit cards only: the day of each month the bill falls due (1–31, clamped
+  // to the last day in shorter months). Costs between two consecutive due dates
+  // form one statement cycle, payable on the closing due date.
+  dueDay            Int?
   sortOrder         Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

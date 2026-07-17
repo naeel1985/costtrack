@@ -20,15 +20,24 @@ const amount = z.coerce
 
 const currency = z.string().min(1).max(8).default("AED");
 
-export const accountSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().min(1, "Name is required").max(80),
-  type: z.enum(ACCOUNT_TYPES),
-  currency,
-  openingBalance: z.coerce.number().finite().default(0),
-  safetyBuffer: z.coerce.number().finite().min(0).default(0),
-  color: z.string().default("#64748b"),
-});
+export const accountSchema = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().min(1, "Name is required").max(80),
+    type: z.enum(ACCOUNT_TYPES),
+    currency,
+    openingBalance: z.coerce.number().finite().default(0),
+    safetyBuffer: z.coerce.number().finite().min(0).default(0),
+    color: z.string().default("#64748b"),
+    // Credit cards only: which day of each month the bill falls due.
+    dueDay: z
+      .union([z.coerce.number().int().min(1, "Day must be 1–31").max(31, "Day must be 1–31"), z.null()])
+      .optional(),
+  })
+  .refine((d) => d.type !== "credit_card" || d.dueDay != null, {
+    message: "Choose the day of the month the card is due",
+    path: ["dueDay"],
+  });
 export type AccountInput = z.infer<typeof accountSchema>;
 
 export const categorySchema = z.object({

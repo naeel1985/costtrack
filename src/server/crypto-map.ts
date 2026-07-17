@@ -39,6 +39,7 @@ export function decryptAccount(a: Raw, dek: Buffer) {
     color: a.color as string,
     isArchived: a.isArchived as boolean,
     isSystem: (a.isSystem as boolean | undefined) ?? false,
+    dueDay: (a.dueDay as number | null | undefined) ?? null,
     sortOrder: a.sortOrder as number,
     createdAt: a.createdAt as Date,
     updatedAt: a.updatedAt as Date,

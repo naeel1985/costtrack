@@ -27,6 +27,7 @@ interface FormValues {
   openingBalance: string;
   safetyBuffer: string;
   color: string;
+  dueDay: string;
 }
 
 export interface AccountInitial {
@@ -37,11 +38,18 @@ export interface AccountInitial {
   openingBalanceMinor?: number;
   safetyBufferMinor?: number;
   color?: string;
+  dueDay?: number | null;
 }
 
 export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onDone?: () => void }) {
   const [pending, startTransition] = React.useTransition();
-  const { register, handleSubmit, watch, setValue } = useForm<FormValues>({
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    formState,
+  } = useForm<FormValues>({
     defaultValues: {
       name: initial?.name ?? "",
       type: initial?.type ?? "bank",
@@ -49,13 +57,21 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
       openingBalance: initial?.openingBalanceMinor != null ? String(initial.openingBalanceMinor / 100) : "0",
       safetyBuffer: initial?.safetyBufferMinor != null ? String(initial.safetyBufferMinor / 100) : "0",
       color: initial?.color ?? COLORS[0],
+      dueDay: initial?.dueDay != null ? String(initial.dueDay) : "",
     },
   });
   const color = watch("color");
+  const type = watch("type");
+  const isCard = type === "credit_card";
 
   function submit(v: FormValues) {
     startTransition(async () => {
-      const res = await saveAccount({ id: initial?.id, ...v });
+      const res = await saveAccount({
+        id: initial?.id,
+        ...v,
+        // Only cards carry a due day.
+        dueDay: v.type === "credit_card" && v.dueDay !== "" ? v.dueDay : null,
+      });
       if (res.ok) {
         toast.success(initial?.id ? "Account updated" : "Account created");
         onDone?.();
@@ -99,13 +115,39 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Opening balance" hint={watch("currency")}>
+        <Field label={isCard ? "Opening balance owed" : "Opening balance"} hint={watch("currency")}>
           <Input inputMode="decimal" className="tabular" {...register("openingBalance")} />
         </Field>
-        <Field label="Safety buffer" hint="warn below">
-          <Input inputMode="decimal" className="tabular" {...register("safetyBuffer")} />
-        </Field>
+        {isCard ? (
+          <Field
+            label="Payment due day"
+            hint="each month"
+            error={formState.errors.dueDay?.message}
+          >
+            <Input
+              inputMode="numeric"
+              placeholder="e.g. 15"
+              className="tabular"
+              {...register("dueDay", {
+                required: "Choose the day of the month the card is due",
+                min: { value: 1, message: "Day must be 1–31" },
+                max: { value: 31, message: "Day must be 1–31" },
+              })}
+            />
+          </Field>
+        ) : (
+          <Field label="Safety buffer" hint="warn below">
+            <Input inputMode="decimal" className="tabular" {...register("safetyBuffer")} />
+          </Field>
+        )}
       </div>
+      {isCard && (
+        <p className="-mt-2 text-xs text-muted-foreground">
+          Costs charged between two due dates form one bill, payable on the closing due date — that
+          is when it hits your free savings. A day past the month&apos;s length (e.g. 31) falls on
+          the last day instead.
+        </p>
+      )}
       <Field label="Colour">
         <div className="flex flex-wrap gap-2">
           {COLORS.map((c) => (

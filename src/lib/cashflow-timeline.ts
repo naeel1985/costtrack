@@ -38,6 +38,10 @@ export interface MonthBucket {
 export interface FreeSavingsPoint {
   t: number; // epoch ms
   freeSavingsMinor: number;
+  /** Income received from today up to and including this day. */
+  cumIncomeMinor: number;
+  /** Known committed costs from today up to and including this day. */
+  cumCostsMinor: number;
 }
 
 export interface CashflowTimeline {
@@ -83,20 +87,28 @@ export function buildCashflowTimeline(input: CashflowTimelineInput): CashflowTim
 
   // ── Daily running free savings ────────────────────────────────────────────
   // Bucket by day-offset once, so this stays O(events + days).
-  const deltaByOffset = new Map<number, number>();
-  const addDelta = (e: DatedAmount, sign: 1 | -1) => {
+  const incomeByOffset = new Map<number, number>();
+  const costsByOffset = new Map<number, number>();
+  const addDelta = (e: DatedAmount, into: Map<number, number>) => {
     const offset = differenceInCalendarDays(startOfDay(e.date), today);
     if (offset < 0 || offset > totalDays) return;
-    deltaByOffset.set(offset, (deltaByOffset.get(offset) ?? 0) + sign * Math.max(0, e.amountMinor));
+    into.set(offset, (into.get(offset) ?? 0) + Math.max(0, e.amountMinor));
   };
-  for (const e of input.incomeEvents) addDelta(e, 1);
-  for (const e of input.costEvents) addDelta(e, -1);
+  for (const e of input.incomeEvents) addDelta(e, incomeByOffset);
+  for (const e of input.costEvents) addDelta(e, costsByOffset);
 
   const daily: FreeSavingsPoint[] = [];
-  let running = input.savingsMinor;
+  let cumIncome = 0;
+  let cumCosts = 0;
   for (let offset = 0; offset <= totalDays; offset++) {
-    running += deltaByOffset.get(offset) ?? 0;
-    daily.push({ t: addDays(today, offset).getTime(), freeSavingsMinor: running });
+    cumIncome += incomeByOffset.get(offset) ?? 0;
+    cumCosts += costsByOffset.get(offset) ?? 0;
+    daily.push({
+      t: addDays(today, offset).getTime(),
+      freeSavingsMinor: input.savingsMinor + cumIncome - cumCosts,
+      cumIncomeMinor: cumIncome,
+      cumCostsMinor: cumCosts,
+    });
   }
 
   return { months: monthList, daily };
