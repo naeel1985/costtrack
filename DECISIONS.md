@@ -29,10 +29,34 @@ Running log of the meaningful choices made while building Cashflow, and why.
 - **Recurring `custom` frequency = every N days**; weekly/monthly/yearly step by
   N of that unit. `occurrenceCount` and `endDate` are honoured from the rule's
   true start, not the projection window.
-- **Provisions are obligations, not cash-flow line items.** They surface in the
-  "upcoming obligations" feed and warnings, but the balance projection tracks
-  only real cash movements (income, recurring costs, PDCs, scheduled). This
-  keeps the projected line meaning exactly "money that will actually move".
+- **A provision counts as a cost once it has a due date.** *(Revised — this
+  previously excluded provisions from the projection entirely.)* A provision with
+  a due date is a dated obligation: money that will actually move, on a known
+  day, so it belongs on the timeline like any recurring cost or cheque. A
+  provision **without** a due date stays out — it's an open-ended savings goal
+  with no point to plot. Only the **unfunded remainder** (`target − allocated`)
+  is charged, since allocated money has already left the ledger via its
+  allocation. See `eventsFromProvisions` in `src/lib/projection.ts`.
+
+- **Cards are liabilities, not spendable accounts.** A credit card is an
+  `Account` of type `credit_card` whose *negative* balance is the amount owed. A
+  credit-card cost posts there as an expense (so it never touches cash), and a
+  payment is a transfer asset → card that lifts the balance back toward zero.
+  Users can hold several cards; a default is created on first use so the
+  zero-config path still works. Cards are excluded from "free savings" and from
+  every cash/debit/transfer picker.
+
+## Charts
+
+- **Income/cost series are re-stepped away from `--positive`/`--negative`.** The
+  product's semantic green/red pair sits at nearly the same lightness, which
+  collapses to **ΔE 4.5 under deuteranopia** — a red-green colourblind reader
+  cannot tell an income bar from a cost bar. `--chart-income` / `--chart-cost`
+  keep the green/red *meaning* but widen the lightness gap, lifting the pair to
+  ΔE ~18 while passing the lightness band, chroma floor, and normal-vision floor
+  in both light and dark (dark steps are re-validated against the dark surface,
+  not flipped). Identity never rests on colour alone: the two-series legend is
+  always present and the tooltip names each series.
 
 ## Persistence
 

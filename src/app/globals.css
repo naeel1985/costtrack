@@ -50,6 +50,19 @@
   --chart-3: oklch(0.7 0.15 70);
   --chart-4: oklch(0.6 0.2 25);
   --chart-5: oklch(0.55 0.16 300);
+
+  /*
+   * Income/cost series for charts. These keep the product's money-direction
+   * semantics (green in, red out) but are deliberately re-stepped in LIGHTNESS
+   * away from --positive/--negative: that pair sits at nearly the same L, which
+   * collapses to ΔE 4.5 under deuteranopia — indistinguishable for red-green
+   * colourblind readers. Widening the lightness gap lifts it to ΔE ~18 while
+   * still reading as green/red. Validated (lightness band, chroma floor, CVD
+   * separation, normal-vision floor, contrast) in both modes; the sub-3:1
+   * contrast warning is relieved by the always-on legend + value labels.
+   */
+  --chart-income: oklch(0.66 0.15 150);
+  --chart-cost: oklch(0.47 0.19 25);
 }
 
 .dark {
@@ -92,6 +105,10 @@
   --chart-3: oklch(0.75 0.15 70);
   --chart-4: oklch(0.66 0.2 25);
   --chart-5: oklch(0.65 0.16 300);
+
+  /* Dark steps are re-validated against the dark surface, not flipped. */
+  --chart-income: oklch(0.67 0.15 150);
+  --chart-cost: oklch(0.49 0.19 25);
 }
 
 @theme inline {
@@ -130,6 +147,8 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-chart-income: var(--chart-income);
+  --color-chart-cost: var(--chart-cost);
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;

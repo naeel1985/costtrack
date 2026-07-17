@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   computeRunway,
   eventsFromPdcs,
+  eventsFromProvisions,
   eventsFromRecurring,
   expandRecurrence,
   projectBalances,
   type PdcInput,
   type ProjectionAccount,
+  type ProvisionInput,
   type RecurringInput,
 } from "./projection";
 
@@ -269,5 +271,61 @@ describe("computeRunway", () => {
     const r = computeRunway(10_000_00, -2_000_00);
     expect(r.months).toBe(5);
     expect(r.depletionDate).not.toBeNull();
+  });
+});
+
+describe("eventsFromProvisions", () => {
+  const provision = (over: Partial<ProvisionInput> = {}): ProvisionInput => ({
+    id: "pr1",
+    name: "School fees",
+    remainingMinor: 5_000_00,
+    dueDate: d("2026-08-10"),
+    accountId: "acc1",
+    status: "active",
+    ...over,
+  });
+
+  it("emits a negative event on the due date for the unfunded remainder", () => {
+    const events = eventsFromProvisions([provision()], d("2026-07-16"), d("2026-09-16"));
+    expect(events).toHaveLength(1);
+    expect(events[0].amountMinor).toBe(-5_000_00);
+    expect(events[0].kind).toBe("provision");
+    expect(ymd(events[0].date)).toBe("2026-08-10");
+  });
+
+  it("skips provisions with no due date (open-ended savings goals)", () => {
+    const events = eventsFromProvisions(
+      [provision({ dueDate: null })],
+      d("2026-07-16"),
+      d("2026-09-16"),
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it("skips fully funded provisions and non-active ones", () => {
+    const from = d("2026-07-16");
+    const to = d("2026-09-16");
+    expect(eventsFromProvisions([provision({ remainingMinor: 0 })], from, to)).toHaveLength(0);
+    expect(eventsFromProvisions([provision({ status: "released" })], from, to)).toHaveLength(0);
+  });
+
+  it("ignores provisions due outside the window", () => {
+    const events = eventsFromProvisions(
+      [provision({ dueDate: d("2027-01-01") })],
+      d("2026-07-16"),
+      d("2026-09-16"),
+    );
+    expect(events).toHaveLength(0);
+  });
+
+  it("falls back to a given account when the provision has none", () => {
+    const events = eventsFromProvisions(
+      [provision({ accountId: null })],
+      d("2026-07-16"),
+      d("2026-09-16"),
+      "fallback-acc",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].accountId).toBe("fallback-acc");
   });
 });

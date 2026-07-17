@@ -6,6 +6,7 @@
 
 import {
   addDays,
+  addMonths,
   endOfMonth,
   format,
   startOfDay,
@@ -27,6 +28,7 @@ import {
 import {
   computeRunway,
   eventsFromPdcs,
+  eventsFromProvisions,
   eventsFromRecurring,
   expandRecurrence,
   projectBalances,
@@ -36,6 +38,15 @@ import {
   type RunwayResult,
 } from "@/lib/projection";
 import { computeBalances } from "./balances";
+import {
+  computeSalaryPeriod,
+  type DatedAmount,
+  type SalaryPeriodResult,
+} from "@/lib/salary-period";
+import { buildCashflowTimeline, type CashflowTimeline } from "@/lib/cashflow-timeline";
+
+/** The dashboard always builds a full year so any date in it can be inspected. */
+export const TIMELINE_MONTHS = 12;
 
 export async function getSettings() {
   const { user } = await requireUser();
@@ -82,12 +93,16 @@ export async function getProjection({
   const start = startOfDay(new Date());
   const end = addDays(start, horizonDays);
 
-  const [rawAccounts, rawPosted, rawScheduled, rawRules, rawPdcs] = await Promise.all([
+  const [rawAccounts, rawPosted, rawScheduled, rawRules, rawPdcs, rawProvisions] = await Promise.all([
     prisma.account.findMany({ where: { userId: user.id, isArchived: false }, orderBy: { sortOrder: "asc" } }),
     prisma.transaction.findMany({ where: { userId: user.id, status: "posted" } }),
     prisma.transaction.findMany({ where: { userId: user.id, status: "scheduled", date: { gte: start, lte: end } } }),
     prisma.recurringRule.findMany({ where: { userId: user.id, isActive: true } }),
     prisma.pDC.findMany({ where: { userId: user.id, status: "pending" } }),
+    prisma.provision.findMany({
+      where: { userId: user.id, status: "active", dueDate: { not: null } },
+      include: { allocations: true },
+    }),
   ]);
 
   const accounts = rawAccounts.map((a) => decryptAccount(a, dek));
@@ -95,6 +110,7 @@ export async function getProjection({
   const scheduled = rawScheduled.map((t) => decryptTransaction(t, dek));
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
   const pdcs = rawPdcs.map((p) => decryptPdc(p, dek));
+  const provisions = rawProvisions.map((p) => decryptProvision(p, dek));
 
   const currentBalances = computeBalances(accounts, posted, start);
 
@@ -136,6 +152,24 @@ export async function getProjection({
       })),
       start,
       end,
+    ),
+    // Provisions with a due date are dated obligations, so they count as costs.
+    // They settle against their own account, else the first asset account.
+    ...eventsFromProvisions(
+      provisions.map((p) => ({
+        id: p.id,
+        name: p.name,
+        remainingMinor: Math.max(
+          0,
+          p.targetMinor - p.allocations.reduce((s, a) => s + a.amountMinor, 0),
+        ),
+        dueDate: p.dueDate,
+        accountId: p.accountId,
+        status: p.status,
+      })),
+      start,
+      end,
+      accounts.find((a) => a.type !== "credit_card")?.id,
     ),
     ...scheduled.map((t) => ({
       date: t.date,
@@ -243,6 +277,104 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
   return items.sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
+/**
+ * Assemble the salary-period view: this period's income vs its committed costs,
+ * and how much of current savings is genuinely free. See `lib/salary-period.ts`
+ * for the definitions. `accounts` is passed in so we reuse the already-computed
+ * balances instead of re-folding the ledger.
+ */
+async function loadForwardView(
+  userId: string,
+  dek: Buffer,
+  accounts: AccountWithBalance[],
+): Promise<{
+  salaryPeriod: SalaryPeriodResult;
+  timeline: CashflowTimeline;
+  creditCardOwedMinor: number;
+  savingsMinor: number;
+}> {
+  const today = startOfDay(new Date());
+  // One year: the dashboard lets the user read free savings at ANY date within
+  // it, so we always build the full 12 months regardless of the chart window.
+  const windowEnd = addMonths(today, TIMELINE_MONTHS);
+
+  const [rawRules, rawPdcs, rawProvisions, rawScheduled] = await Promise.all([
+    prisma.recurringRule.findMany({ where: { userId, isActive: true } }),
+    prisma.pDC.findMany({ where: { userId, status: "pending", dueDate: { gte: today, lte: windowEnd } } }),
+    prisma.provision.findMany({
+      // Only provisions with a due date are dated obligations; open-ended
+      // savings goals have no point on the timeline.
+      where: { userId, status: "active", dueDate: { gte: today, lte: windowEnd } },
+      include: { allocations: true },
+    }),
+    prisma.transaction.findMany({
+      where: { userId, status: "scheduled", date: { gte: today, lte: windowEnd } },
+    }),
+  ]);
+
+  const rules = rawRules.map((r) => decryptRecurring(r, dek));
+
+  // Free savings base = liquid asset accounts (never a credit-card liability).
+  const savingsMinor = accounts
+    .filter((a) => !a.isSystem && a.type !== "credit_card")
+    .reduce((s, a) => s + a.balanceMinor, 0);
+
+  const expand = (r: (typeof rules)[number]) =>
+    expandRecurrence(
+      { frequency: r.frequency as never, interval: r.interval, startDate: r.startDate, endDate: r.endDate, occurrenceCount: r.occurrenceCount },
+      today,
+      windowEnd,
+    );
+
+  // Salary defines the period boundaries: monthly income rules only.
+  const salaryEvents: DatedAmount[] = rules
+    .filter((r) => r.type === "income" && r.frequency === "monthly")
+    .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
+
+  // All expected income (any cadence) for the income-vs-costs chart.
+  const incomeEvents: DatedAmount[] = rules
+    .filter((r) => r.type === "income")
+    .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
+
+  // Committed costs: recurring costs, scheduled spend, issued cheques due, and
+  // the unfunded remainder of provisions that carry a due date.
+  const costEvents: DatedAmount[] = [];
+  for (const r of rules.filter((r) => r.type === "expense")) {
+    for (const date of expand(r)) costEvents.push({ date, amountMinor: r.amountMinor });
+  }
+  for (const raw of rawScheduled) {
+    const t = decryptTransaction(raw, dek);
+    if (t.type === "income") incomeEvents.push({ date: t.date, amountMinor: t.amountMinor });
+    else if (t.type === "expense") costEvents.push({ date: t.date, amountMinor: t.amountMinor });
+  }
+  for (const raw of rawPdcs) {
+    const p = decryptPdc(raw, dek);
+    if (p.direction === "issued") costEvents.push({ date: p.dueDate, amountMinor: p.amountMinor });
+    else incomeEvents.push({ date: p.dueDate, amountMinor: p.amountMinor });
+  }
+  for (const raw of rawProvisions) {
+    const pr = decryptProvision(raw, dek);
+    const funded = pr.allocations.reduce((s, a) => s + a.amountMinor, 0);
+    const remaining = Math.max(0, pr.targetMinor - funded);
+    if (remaining > 0 && pr.dueDate) costEvents.push({ date: pr.dueDate, amountMinor: remaining });
+  }
+
+  const salaryPeriod = computeSalaryPeriod({ today, savingsMinor, salaryEvents, costEvents });
+  const timeline = buildCashflowTimeline({
+    today,
+    savingsMinor,
+    incomeEvents,
+    costEvents,
+    months: TIMELINE_MONTHS,
+  });
+
+  const creditCardOwedMinor = accounts
+    .filter((a) => a.type === "credit_card")
+    .reduce((s, a) => s + Math.max(0, -a.balanceMinor), 0);
+
+  return { salaryPeriod, timeline, creditCardOwedMinor, savingsMinor };
+}
+
 export interface DashboardData {
   accounts: AccountWithBalance[];
   netWorthMinor: number;
@@ -253,6 +385,10 @@ export interface DashboardData {
   projection: ProjectionResult;
   obligations: UpcomingObligation[];
   baseCurrency: string;
+  salaryPeriod: SalaryPeriodResult;
+  timeline: CashflowTimeline;
+  creditCardOwedMinor: number;
+  savingsMinor: number;
 }
 
 export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
@@ -285,6 +421,12 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
   const monthlyNetMinor = Math.round((income3 - expense3) / 3);
   const runway = computeRunway(netWorthMinor, monthlyNetMinor, now);
 
+  const { salaryPeriod, timeline, creditCardOwedMinor, savingsMinor } = await loadForwardView(
+    user.id,
+    dek,
+    accounts,
+  );
+
   return {
     accounts,
     netWorthMinor,
@@ -295,6 +437,10 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
     projection: result,
     obligations,
     baseCurrency: settings.baseCurrency,
+    salaryPeriod,
+    timeline,
+    creditCardOwedMinor,
+    savingsMinor,
   };
 }
 

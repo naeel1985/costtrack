@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import {
@@ -15,6 +16,7 @@ import { loginSchema, registerSchema, resendSchema } from "@/lib/auth-schemas";
 import {
   createSession,
   destroySession,
+  getAuth,
   isLockedOut,
   recordLoginAttempt,
 } from "@/server/auth";
@@ -161,6 +163,36 @@ export async function loginUser(input: unknown): Promise<AuthResult> {
 export async function logout() {
   await destroySession();
   redirect("/login");
+}
+
+const profileSchema = z.object({
+  fullName: z
+    .string()
+    .trim()
+    .min(1, "Name can't be empty")
+    .max(80, "Name is too long (80 characters max)")
+    // At least one letter, so a name can't be only digits/punctuation — the
+    // letter avatar needs something real to work with.
+    .refine((v) => /\p{L}/u.test(v), "Name must contain at least one letter"),
+});
+
+/**
+ * Update the signed-in user's display name. `fullName` is deliberately
+ * plaintext (identity is admin-visible by design), so there's no DEK work here.
+ */
+export async function updateProfile(input: unknown): Promise<AuthResult> {
+  try {
+    const auth = await getAuth();
+    if (!auth) return { ok: false, error: "You're signed out. Please sign in again." };
+    const { fullName } = profileSchema.parse(input);
+    // Collapse runs of whitespace so "Naeel   Zuriek" stores cleanly.
+    const clean = fullName.replace(/\s+/g, " ");
+    await prisma.user.update({ where: { id: auth.user.id }, data: { fullName: clean } });
+    revalidatePath("/", "layout");
+    return { ok: true, message: "Name updated" };
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 export async function verifyEmailToken(token: string): Promise<AuthResult> {

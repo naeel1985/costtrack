@@ -19,6 +19,9 @@ import { AddTransactionButton } from "@/components/add-transaction-button";
 import { ProjectionExplorer } from "@/components/dashboard/projection-explorer";
 import { WarningsBanner } from "@/components/dashboard/warnings-banner";
 import { ObligationsList } from "@/components/dashboard/obligations-list";
+import { SalaryPeriodCard } from "@/components/dashboard/salary-period-card";
+import { IncomeVsCostsCard } from "@/components/dashboard/income-vs-costs-card";
+import { FreeSavingsExplorer } from "@/components/dashboard/free-savings-explorer";
 import { ACCOUNT_TYPE_LABELS, type AccountType } from "@/lib/domain";
 
 export default async function DashboardPage() {
@@ -33,6 +36,9 @@ export default async function DashboardPage() {
     obligations,
     projection,
     baseCurrency,
+    salaryPeriod,
+    timeline,
+    creditCardOwedMinor,
   } = dashboard;
 
   const runwayLabel =
@@ -86,6 +92,20 @@ export default async function DashboardPage() {
           icon={<Gauge className="h-4 w-4" />}
         />
       </div>
+
+      {/* The forward view: the shape of the year, and what's actually free. */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <IncomeVsCostsCard months={timeline.months} currency={baseCurrency} />
+        </div>
+        <SalaryPeriodCard
+          period={salaryPeriod}
+          creditCardOwedMinor={creditCardOwedMinor}
+          currency={baseCurrency}
+        />
+      </div>
+
+      <FreeSavingsExplorer daily={timeline.daily} currency={baseCurrency} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">

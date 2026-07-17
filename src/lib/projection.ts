@@ -68,6 +68,17 @@ export interface PdcInput {
   status: string;
 }
 
+export interface ProvisionInput {
+  id: string;
+  name: string;
+  /** Unfunded remainder still to be paid (target − allocated). */
+  remainingMinor: number;
+  /** Provisions only count as cash-flow when they have a due date. */
+  dueDate: Date | null;
+  accountId: string | null;
+  status: string;
+}
+
 export interface DayPoint {
   date: Date;
   /** Balance per account id at end of this day. */
@@ -205,6 +216,41 @@ export function eventsFromPdcs(
           : `Cheque from ${pdc.counterparty}`,
       refId: pdc.id,
       chequeNumber: pdc.chequeNumber,
+    });
+  }
+  return events;
+}
+
+/**
+ * Provisions with a **due date** are real, dated obligations, so they count as
+ * costs. A provision with no due date is an open-ended savings goal — it has no
+ * point on the timeline and is skipped. Only the unfunded remainder counts;
+ * money already allocated has left the ledger via its allocation.
+ */
+export function eventsFromProvisions(
+  provisions: ProvisionInput[],
+  from: Date,
+  to: Date,
+  fallbackAccountId?: string,
+): ProjectionEvent[] {
+  const windowStart = startOfDay(from);
+  const windowEnd = startOfDay(to);
+  const events: ProjectionEvent[] = [];
+  for (const pr of provisions) {
+    if (pr.status !== "active") continue;
+    if (!pr.dueDate) continue; // no due date → not a cash-flow event
+    if (pr.remainingMinor <= 0) continue; // already funded
+    const due = startOfDay(pr.dueDate);
+    if (isBefore(due, windowStart) || isAfter(due, windowEnd)) continue;
+    const accountId = pr.accountId ?? fallbackAccountId;
+    if (!accountId) continue;
+    events.push({
+      date: due,
+      accountId,
+      amountMinor: -pr.remainingMinor,
+      kind: "provision",
+      label: pr.name,
+      refId: pr.id,
     });
   }
   return events;
