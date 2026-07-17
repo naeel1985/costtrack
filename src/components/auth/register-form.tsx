@@ -10,11 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Field } from "@/components/forms/field";
 import { registerUser } from "@/server/auth-actions";
+import { RecoveryCodePanel } from "@/components/auth/recovery-code-panel";
 import type { RegisterInput } from "@/lib/auth-schemas";
 
 export function RegisterForm() {
   const [pending, startTransition] = React.useTransition();
   const [done, setDone] = React.useState<string | null>(null);
+  const [recoveryCode, setRecoveryCode] = React.useState<string | null>(null);
   const { register, handleSubmit, formState } = useForm<RegisterInput>();
 
   function submit(values: RegisterInput) {
@@ -22,6 +24,7 @@ export function RegisterForm() {
       const res = await registerUser(values);
       if (res.ok) {
         setDone(res.message ?? "Account created. Check your email to verify it.");
+        setRecoveryCode(res.recoveryCode ?? null);
         toast.success("Account created");
       } else {
         toast.error(res.error);
@@ -32,11 +35,16 @@ export function RegisterForm() {
   if (done) {
     return (
       <Card>
-        <CardContent className="flex flex-col items-center gap-3 py-8 text-center">
-          <CheckCircle2 className="h-10 w-10 text-positive" />
-          <h2 className="text-lg font-semibold">Almost there</h2>
-          <p className="text-sm text-muted-foreground">{done}</p>
-          <Button asChild className="mt-2 w-full">
+        <CardContent className="flex flex-col gap-4 py-8">
+          <div className="flex flex-col items-center gap-3 text-center">
+            <CheckCircle2 className="h-10 w-10 text-positive" />
+            <h2 className="text-lg font-semibold">Almost there</h2>
+            <p className="text-sm text-muted-foreground">{done}</p>
+          </div>
+          {/* Shown once — it's the only way back into the data if the password
+              is ever forgotten, and we can't reissue it. */}
+          {recoveryCode && <RecoveryCodePanel code={recoveryCode} />}
+          <Button asChild className="w-full">
             <Link href="/login">Go to sign in</Link>
           </Button>
         </CardContent>

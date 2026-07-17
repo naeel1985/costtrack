@@ -4,12 +4,17 @@ import {
   createWrappedDek,
   decrypt,
   encrypt,
+  generateNumericCode,
+  generateRecoveryCode,
   hashPassword,
   hashToken,
   openDekFromSession,
+  rewrapDek,
   sealDekForSession,
   unwrapDek,
+  unwrapDekWithRecovery,
   verifyPassword,
+  wrapDekWithRecovery,
 } from "./crypto";
 
 beforeAll(() => {
@@ -87,5 +92,76 @@ describe("token hashing", () => {
     expect(h).toBe(hashToken("abc123"));
     expect(h).not.toContain("abc123");
     expect(h).toHaveLength(64);
+  });
+});
+
+describe("recovery code", () => {
+  it("generates a transcribable code with no look-alike characters", () => {
+    const code = generateRecoveryCode();
+    expect(code).toMatch(/^[0-9A-Z]{5}(-[0-9A-Z]{5}){3}$/);
+    // I, L, O and U are excluded so the code can't be misread.
+    expect(code).not.toMatch(/[ILOU]/);
+  });
+
+  it("generates a different code each time", () => {
+    expect(generateRecoveryCode()).not.toBe(generateRecoveryCode());
+  });
+
+  it("recovers the DEK — this is what saves the data on a password reset", () => {
+    const { dek } = createWrappedDek("OldPass123!");
+    const code = generateRecoveryCode();
+    const bundle = wrapDekWithRecovery(dek, code);
+    expect(unwrapDekWithRecovery(code, bundle).equals(dek)).toBe(true);
+  });
+
+  it("forgives cosmetic mistyping (case, spaces, dashes, O/0 and I/1)", () => {
+    const { dek } = createWrappedDek("OldPass123!");
+    const bundle = wrapDekWithRecovery(dek, "K4M2X-9QT7B-0R5WZ-3NPHD");
+    for (const typed of [
+      "k4m2x-9qt7b-0r5wz-3nphd", // lowercase
+      "K4M2X 9QT7B 0R5WZ 3NPHD", // spaces instead of dashes
+      "K4M2X9QT7B0R5WZ3NPHD", // no separators
+      "K4M2X-9QT7B-OR5WZ-3NPHD", // typed letter O for zero
+    ]) {
+      expect(unwrapDekWithRecovery(typed, bundle).equals(dek)).toBe(true);
+    }
+  });
+
+  it("rejects a wrong recovery code", () => {
+    const { dek } = createWrappedDek("OldPass123!");
+    const bundle = wrapDekWithRecovery(dek, generateRecoveryCode());
+    expect(() => unwrapDekWithRecovery(generateRecoveryCode(), bundle)).toThrow();
+  });
+
+  it("survives a full reset: recover with the code, re-wrap under a new password", () => {
+    const { dek, dekWrapped, dekSalt } = createWrappedDek("OldPass123!");
+    const code = generateRecoveryCode();
+    const recovery = wrapDekWithRecovery(dek, code);
+
+    // The user forgets "OldPass123!" entirely and resets.
+    const recovered = unwrapDekWithRecovery(code, recovery);
+    const next = rewrapDek(recovered, "BrandNewPass456!");
+
+    // New password opens the DEK; the old wrapping is untouched but unused.
+    expect(unwrapDek("BrandNewPass456!", next).equals(dek)).toBe(true);
+    expect(unwrapDek("OldPass123!", { dekWrapped, dekSalt }).equals(dek)).toBe(true);
+    // And the old password does NOT open the new wrapping.
+    expect(() => unwrapDek("OldPass123!", next)).toThrow();
+  });
+
+  it("keeps the DEK unreadable without the code (no server escrow)", () => {
+    const { dek } = createWrappedDek("OldPass123!");
+    const bundle = wrapDekWithRecovery(dek, generateRecoveryCode());
+    // The stored bundle is ciphertext; it must not leak the key material.
+    expect(bundle.dekWrapped).not.toContain(dek.toString("base64"));
+    expect(() => unwrapDek("", bundle)).toThrow();
+  });
+});
+
+describe("generateNumericCode", () => {
+  it("returns a zero-padded code of the requested length", () => {
+    for (let i = 0; i < 50; i++) {
+      expect(generateNumericCode(6)).toMatch(/^\d{6}$/);
+    }
   });
 });

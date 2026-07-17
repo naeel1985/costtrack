@@ -6,13 +6,24 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import {
   createWrappedDek,
+  generateNumericCode,
+  generateRecoveryCode,
   generateToken,
   hashPassword,
   hashToken,
+  rewrapDek,
   unwrapDek,
+  unwrapDekWithRecovery,
   verifyPassword,
+  wrapDekWithRecovery,
 } from "@/lib/crypto";
-import { loginSchema, registerSchema, resendSchema } from "@/lib/auth-schemas";
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  registerSchema,
+  resendSchema,
+  resetPasswordSchema,
+} from "@/lib/auth-schemas";
 import {
   createSession,
   destroySession,
@@ -20,10 +31,12 @@ import {
   isLockedOut,
   recordLoginAttempt,
 } from "@/server/auth";
-import { sendVerificationEmail } from "@/server/mailer";
+import { sendPasswordResetEmail, sendVerificationEmail } from "@/server/mailer";
 import { encStr } from "@/server/crypto-map";
 
-export type AuthResult = { ok: true; message?: string } | { ok: false; error: string };
+export type AuthResult =
+  | { ok: true; message?: string; recoveryCode?: string }
+  | { ok: false; error: string };
 
 function fail(error: unknown): AuthResult {
   if (error instanceof z.ZodError) {
@@ -80,6 +93,11 @@ export async function registerUser(input: unknown): Promise<AuthResult> {
     const passwordHash = hashPassword(data.password);
     const { dek, dekWrapped, dekSalt } = createWrappedDek(data.password);
 
+    // Second wrapping of the same DEK under a one-time recovery code — the only
+    // way a password reset can return the user's data (we never hold the key).
+    const recoveryCode = generateRecoveryCode();
+    const recovery = wrapDekWithRecovery(dek, recoveryCode);
+
     const user = await prisma.user.create({
       data: {
         username,
@@ -90,6 +108,8 @@ export async function registerUser(input: unknown): Promise<AuthResult> {
         passwordHash,
         dekWrapped,
         dekSalt,
+        dekRecoveryWrapped: recovery.dekWrapped,
+        dekRecoverySalt: recovery.dekSalt,
         settings: { create: {} },
         categories: {
           create: DEFAULT_CATEGORIES.map((c, i) => ({
@@ -104,7 +124,11 @@ export async function registerUser(input: unknown): Promise<AuthResult> {
     });
 
     await issueVerification(user.id, email, user.fullName);
-    return { ok: true, message: "Account created. Check your email to verify and activate it." };
+    return {
+      ok: true,
+      message: "Account created. Check your email to verify and activate it.",
+      recoveryCode,
+    };
   } catch (e) {
     return fail(e);
   }
@@ -163,6 +187,133 @@ export async function loginUser(input: unknown): Promise<AuthResult> {
 export async function logout() {
   await destroySession();
   redirect("/login");
+}
+
+// ── Password reset ───────────────────────────────────────────────────────────
+
+const RESET_TTL_MINUTES = 15;
+
+/**
+ * Step 1: email a one-time code. Always reports success — telling a stranger
+ * whether an address is registered would leak our user list.
+ */
+export async function requestPasswordReset(input: unknown): Promise<AuthResult> {
+  const generic = {
+    ok: true as const,
+    message: "If that email is registered, a reset code is on its way.",
+  };
+  try {
+    const { email } = forgotPasswordSchema.parse(input);
+    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
+    if (!user || !user.isActive) return generic;
+
+    const code = generateNumericCode(6);
+    // Invalidate any earlier codes so only the newest works.
+    await prisma.emailToken.deleteMany({ where: { userId: user.id, type: "reset_password" } });
+    await prisma.emailToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashToken(code),
+        type: "reset_password",
+        expiresAt: new Date(Date.now() + RESET_TTL_MINUTES * 60_000),
+      },
+    });
+    await sendPasswordResetEmail(user.email, user.fullName, code);
+    return generic;
+  } catch (e) {
+    // A malformed email still gets the generic answer; real faults surface.
+    if (e instanceof z.ZodError) return fail(e);
+    return generic;
+  }
+}
+
+/**
+ * Step 2: verify the emailed code, recover the DEK with the recovery code, and
+ * re-wrap it under the new password. Without the recovery code the DEK is
+ * unrecoverable by design — nobody, including us, can decrypt the user's data.
+ */
+export async function resetPassword(input: unknown): Promise<AuthResult> {
+  try {
+    const data = resetPasswordSchema.parse(input);
+    const email = data.email.toLowerCase().trim();
+    const user = await prisma.user.findUnique({ where: { email } });
+    // Keep failures indistinguishable so this can't be used to probe accounts.
+    const badCode = { ok: false as const, error: "That code is invalid or has expired." };
+    if (!user) return badCode;
+
+    const record = await prisma.emailToken.findUnique({ where: { tokenHash: hashToken(data.code) } });
+    if (!record || record.userId !== user.id || record.type !== "reset_password") return badCode;
+    if (record.consumedAt) return badCode;
+    if (record.expiresAt < new Date()) return badCode;
+
+    if (!user.dekRecoveryWrapped || !user.dekRecoverySalt) {
+      return {
+        ok: false,
+        error:
+          "This account has no recovery code, so its encrypted data can't be unlocked without the old password. Sign in and generate one from your profile.",
+      };
+    }
+
+    let dek: Buffer;
+    try {
+      dek = unwrapDekWithRecovery(data.recoveryCode, {
+        dekWrapped: user.dekRecoveryWrapped,
+        dekSalt: user.dekRecoverySalt,
+      });
+    } catch {
+      return { ok: false, error: "That recovery code doesn't match this account." };
+    }
+
+    // Re-wrap the SAME DEK under the new password, so all existing data stays
+    // readable, and mint a fresh recovery wrapping bound to the new secret.
+    const next = rewrapDek(dek, data.password);
+    const newRecoveryCode = generateRecoveryCode();
+    const nextRecovery = wrapDekWithRecovery(dek, newRecoveryCode);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash: hashPassword(data.password),
+          dekWrapped: next.dekWrapped,
+          dekSalt: next.dekSalt,
+          dekRecoveryWrapped: nextRecovery.dekWrapped,
+          dekRecoverySalt: nextRecovery.dekSalt,
+        },
+      }),
+      prisma.emailToken.update({ where: { id: record.id }, data: { consumedAt: new Date() } }),
+      // A password change invalidates every existing session.
+      prisma.session.deleteMany({ where: { userId: user.id } }),
+    ]);
+
+    return {
+      ok: true,
+      message: "Password updated. Your data is intact — sign in with your new password.",
+      recoveryCode: newRecoveryCode,
+    };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Mint a recovery code for a signed-in user (needed by accounts created before
+ * recovery existed). Uses the DEK from the live session, so no password prompt.
+ */
+export async function createRecoveryCode(): Promise<AuthResult> {
+  try {
+    const auth = await getAuth();
+    if (!auth) return { ok: false, error: "You're signed out. Please sign in again." };
+    const recoveryCode = generateRecoveryCode();
+    const bundle = wrapDekWithRecovery(auth.dek, recoveryCode);
+    await prisma.user.update({
+      where: { id: auth.user.id },
+      data: { dekRecoveryWrapped: bundle.dekWrapped, dekRecoverySalt: bundle.dekSalt },
+    });
+    return { ok: true, message: "Recovery code created", recoveryCode };
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 const profileSchema = z.object({

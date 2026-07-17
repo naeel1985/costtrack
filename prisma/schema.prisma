@@ -45,6 +45,16 @@ model User {
   dekWrapped     String
   dekSalt        String
 
+  // The same DEK, additionally wrapped by a key derived from a one-time
+  // RECOVERY CODE. This is what makes "forgot password" survivable: a reset
+  // unwraps the DEK with the recovery code and re-wraps it under the new
+  // password. The recovery code itself is never stored (only the code can open
+  // this), so the zero-knowledge guarantee holds — an admin with the database
+  // still cannot read a user's data. Nullable: pre-existing users mint theirs
+  // from the app while signed in.
+  dekRecoveryWrapped String?
+  dekRecoverySalt    String?
+
   emailVerified   Boolean   @default(false)
   emailVerifiedAt DateTime?
   isActive        Boolean   @default(true)

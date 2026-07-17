@@ -137,6 +137,68 @@ export function rewrapDek(dek: Buffer, newPassword: string): DekBundle {
   return { dekWrapped: encryptBytes(dek, kek), dekSalt };
 }
 
+// ── Recovery code ────────────────────────────────────────────────────────────
+//
+// A password reset happens by definition WITHOUT the old password, so there is
+// nothing to unwrap the DEK with — the user's data would be lost forever. The
+// recovery code is a second, independent passphrase wrapping the same DEK:
+// reset unwraps with it, then re-wraps under the new password.
+//
+// The code is never stored (not even hashed for this purpose — only the code
+// itself can open `dekRecoveryWrapped`), so this preserves the guarantee that
+// nobody with the database — admin included — can read a user's data.
+
+/** Crockford-style base32, minus I/L/O/U to avoid look-alikes and rude words. */
+const RECOVERY_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const RECOVERY_GROUPS = 4;
+const RECOVERY_GROUP_LEN = 5;
+
+/** Generate a human-transcribable recovery code, e.g. "K4M2X-9QT7B-...". */
+export function generateRecoveryCode(): string {
+  const groups: string[] = [];
+  for (let g = 0; g < RECOVERY_GROUPS; g++) {
+    const bytes = randomBytes(RECOVERY_GROUP_LEN);
+    let out = "";
+    for (let i = 0; i < RECOVERY_GROUP_LEN; i++) {
+      out += RECOVERY_ALPHABET[bytes[i] % RECOVERY_ALPHABET.length];
+    }
+    groups.push(out);
+  }
+  return groups.join("-");
+}
+
+/**
+ * Normalise user input before deriving: strip spaces/dashes, uppercase, and map
+ * the characters people habitually mistype (O->0, I/L->1) onto the alphabet, so
+ * a correct code isn't rejected over cosmetics.
+ */
+export function normaliseRecoveryCode(code: string): string {
+  return (code ?? "")
+    .toUpperCase()
+    .replace(/[\s-]/g, "")
+    .replace(/O/g, "0")
+    .replace(/[IL]/g, "1")
+    .replace(/U/g, "V");
+}
+
+/** Wrap a DEK with a recovery code (independent of the password wrapping). */
+export function wrapDekWithRecovery(dek: Buffer, recoveryCode: string): DekBundle {
+  return rewrapDek(dek, normaliseRecoveryCode(recoveryCode));
+}
+
+/** Recover the DEK using the recovery code. Throws if the code is wrong. */
+export function unwrapDekWithRecovery(recoveryCode: string, bundle: DekBundle): Buffer {
+  return unwrapDek(normaliseRecoveryCode(recoveryCode), bundle);
+}
+
+/** A short numeric code emailed for password reset (not a secret at rest). */
+export function generateNumericCode(digits = 6): string {
+  const max = 10 ** digits;
+  // Rejection-free: take 4 random bytes and mod into range, then pad.
+  const n = randomBytes(4).readUInt32BE(0) % max;
+  return String(n).padStart(digits, "0");
+}
+
 // ── Server key (from env) ─────────────────────────────────────────────────────
 
 let cachedServerKey: Buffer | null = null;

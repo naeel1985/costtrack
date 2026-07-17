@@ -45,6 +45,14 @@ export function LoginForm() {
           <Field label="Password">
             <Input type="password" autoComplete="current-password" {...register("password", { required: true })} />
           </Field>
+          <div className="-mt-2 text-right">
+            <Link
+              href="/forgot-password"
+              className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+            >
+              Forgot password?
+            </Link>
+          </div>
           <Button type="submit" className="w-full" disabled={pending}>
             {pending ? "Signing in…" : "Sign in"}
           </Button>

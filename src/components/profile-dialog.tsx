@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/forms/field";
 import { LetterAvatar } from "@/components/letter-avatar";
-import { updateProfile } from "@/server/auth-actions";
+import { RecoveryCodePanel } from "@/components/auth/recovery-code-panel";
+import { createRecoveryCode, updateProfile } from "@/server/auth-actions";
 import { getInitials } from "@/lib/initials";
 import type { ShellUser } from "@/components/user-menu";
 
@@ -29,12 +30,25 @@ export function ProfileDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [pending, startTransition] = React.useTransition();
+  const [recoveryPending, startRecovery] = React.useTransition();
   const [name, setName] = React.useState(user.fullName);
+  const [newRecoveryCode, setNewRecoveryCode] = React.useState<string | null>(null);
 
   // Re-sync when reopened, so a cancelled edit doesn't linger.
   React.useEffect(() => {
-    if (open) setName(user.fullName);
+    if (open) {
+      setName(user.fullName);
+      setNewRecoveryCode(null);
+    }
   }, [open, user.fullName]);
+
+  function mintRecoveryCode() {
+    startRecovery(async () => {
+      const res = await createRecoveryCode();
+      if (res.ok && res.recoveryCode) setNewRecoveryCode(res.recoveryCode);
+      else if (!res.ok) toast.error(res.error);
+    });
+  }
 
   const trimmed = name.trim();
   const error =
@@ -108,6 +122,32 @@ export function ProfileDialog({
             </Button>
           </div>
         </form>
+
+        {/* Recovery code — needed to reset a forgotten password without losing
+            data. Accounts created before this existed can mint one here. */}
+        <div className="space-y-3 border-t pt-4">
+          {newRecoveryCode ? (
+            <RecoveryCodePanel code={newRecoveryCode} />
+          ) : (
+            <>
+              <div className="text-sm font-medium">Recovery code</div>
+              <p className="text-xs text-muted-foreground">
+                Your data is encrypted with a key derived from your password. A recovery code is the
+                only way to unlock it if you ever forget that password — generate one and store it
+                safely. Generating a new code replaces any previous one.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={mintRecoveryCode}
+                disabled={recoveryPending}
+              >
+                {recoveryPending ? "Generating…" : "Generate recovery code"}
+              </Button>
+            </>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

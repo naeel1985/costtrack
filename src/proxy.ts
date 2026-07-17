@@ -5,7 +5,15 @@ import { NextResponse, type NextRequest } from "next/server";
 // (session lookup, expiry, DEK) happens in the (app) layout via requireUser().
 // `/` (marketing home) and `/packages` (pricing) are the public commercial
 // front door; the rest of the public list is the auth flow.
-const PUBLIC = ["/", "/packages", "/login", "/register", "/verify", "/verify-email"];
+const PUBLIC = [
+  "/",
+  "/packages",
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/verify",
+  "/verify-email",
+];
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

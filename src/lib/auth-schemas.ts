@@ -42,3 +42,28 @@ export type LoginInput = z.infer<typeof loginSchema>;
 
 export const verifySchema = z.object({ token: z.string().min(10) });
 export const resendSchema = z.object({ email: z.string().email() });
+
+// ── Password reset ───────────────────────────────────────────────────────────
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email("Enter a valid email").max(200),
+});
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+
+export const resetPasswordSchema = z
+  .object({
+    email: z.string().email("Enter a valid email").max(200),
+    code: z
+      .string()
+      .trim()
+      .regex(/^\d{6}$/, "Enter the 6-digit code from your email"),
+    // Accepted in any cosmetic form; normalised before use.
+    recoveryCode: z.string().min(1, "Enter your recovery code").max(64),
+    password: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((d) => d.password === d.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
