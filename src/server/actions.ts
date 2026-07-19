@@ -127,6 +127,11 @@ export async function saveAccount(input: unknown): Promise<ActionResult> {
       currency: data.currency,
       openingBalanceEnc: encInt(toMinor(data.openingBalance, data.currency), dek),
       safetyBufferEnc: encInt(toMinor(data.safetyBuffer, data.currency), dek),
+      // Only cards carry a limit; clear it if the type changes away.
+      creditLimitEnc:
+        data.type === "credit_card" && data.creditLimit != null
+          ? encInt(toMinor(data.creditLimit, data.currency), dek)
+          : null,
       color: data.color,
       // Only cards carry a due day; clear it if the type changes away.
       dueDay: data.type === "credit_card" ? data.dueDay ?? null : null,

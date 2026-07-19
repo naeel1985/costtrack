@@ -44,7 +44,7 @@ import {
   type SalaryPeriodResult,
 } from "@/lib/salary-period";
 import { buildCashflowTimeline, type CashflowTimeline } from "@/lib/cashflow-timeline";
-import { cardCycleCosts } from "@/lib/card-cycle";
+import { cardCycleBills } from "@/lib/card-cycle";
 
 /** The dashboard always builds a full year so any date in it can be inspected. */
 export const TIMELINE_MONTHS = 12;
@@ -315,32 +315,20 @@ async function loadForwardView(
 
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
 
-  // Credit-card bills: costs charged between two due dates form one statement,
-  // payable on the closing due date — that's when cash actually leaves. Card
-  // expenses are NOT counted directly (they'd double-count against the bill).
+  // ── Credit cards are loans repaid on a due date ─────────────────────────────
+  // A charge to a card doesn't leave cash when it's swiped; the statement is
+  // repaid on the card's due date. So we collect each card's FUTURE charges
+  // (recurring occurrences + scheduled spend) and, together with what's already
+  // owed, turn them into repayment events on the due dates below. Those charges
+  // are therefore kept OUT of the direct cost list to avoid double-counting.
   const cards = accounts.filter((a) => a.type === "credit_card" && a.dueDay != null);
-  const cardCostEvents: DatedAmount[] = [];
-  if (cards.length > 0) {
-    const rawCardTx = await prisma.transaction.findMany({
-      where: { userId, type: "expense", accountId: { in: cards.map((c) => c.id) } },
-    });
-    const cardTx = rawCardTx.map((t) => decryptTransaction(t, dek));
-    for (const card of cards) {
-      cardCostEvents.push(
-        ...cardCycleCosts(
-          {
-            dueDay: card.dueDay!,
-            owedMinor: Math.max(0, -card.balanceMinor),
-            costs: cardTx
-              .filter((t) => t.accountId === card.id)
-              .map((t) => ({ date: t.date, amountMinor: t.amountMinor })),
-          },
-          today,
-          windowEnd,
-        ),
-      );
-    }
-  }
+  const cardIds = new Set(cards.map((c) => c.id));
+  const cardCharges = new Map<string, DatedAmount[]>();
+  const pushCharge = (accountId: string, e: DatedAmount) => {
+    const list = cardCharges.get(accountId);
+    if (list) list.push(e);
+    else cardCharges.set(accountId, [e]);
+  };
 
   // Free savings base = liquid asset accounts (never a credit-card liability).
   const savingsMinor = accounts
@@ -364,17 +352,25 @@ async function loadForwardView(
     .filter((r) => r.type === "income")
     .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
 
-  // Committed costs: recurring costs, scheduled spend, issued cheques due, the
-  // unfunded remainder of provisions that carry a due date, and credit-card
-  // bills on their due dates.
-  const costEvents: DatedAmount[] = [...cardCostEvents];
+  // Committed costs: recurring costs, scheduled spend, issued cheques due and
+  // the unfunded remainder of provisions that carry a due date. Charges aimed at
+  // a credit card are diverted to that card and billed on its due date instead.
+  const costEvents: DatedAmount[] = [];
   for (const r of rules.filter((r) => r.type === "expense")) {
-    for (const date of expand(r)) costEvents.push({ date, amountMinor: r.amountMinor });
+    for (const date of expand(r)) {
+      const e = { date, amountMinor: r.amountMinor };
+      if (cardIds.has(r.accountId)) pushCharge(r.accountId, e);
+      else costEvents.push(e);
+    }
   }
   for (const raw of rawScheduled) {
     const t = decryptTransaction(raw, dek);
-    if (t.type === "income") incomeEvents.push({ date: t.date, amountMinor: t.amountMinor });
-    else if (t.type === "expense") costEvents.push({ date: t.date, amountMinor: t.amountMinor });
+    const e = { date: t.date, amountMinor: t.amountMinor };
+    if (t.type === "income") incomeEvents.push(e);
+    else if (t.type === "expense") {
+      if (cardIds.has(t.accountId)) pushCharge(t.accountId, e);
+      else costEvents.push(e);
+    }
   }
   for (const raw of rawPdcs) {
     const p = decryptPdc(raw, dek);
@@ -386,6 +382,22 @@ async function loadForwardView(
     const funded = pr.allocations.reduce((s, a) => s + a.amountMinor, 0);
     const remaining = Math.max(0, pr.targetMinor - funded);
     if (remaining > 0 && pr.dueDate) costEvents.push({ date: pr.dueDate, amountMinor: remaining });
+  }
+
+  // Each card's current balance + future charges become repayment events on the
+  // due dates — this is where credit-card spending finally hits free savings.
+  for (const card of cards) {
+    costEvents.push(
+      ...cardCycleBills(
+        {
+          dueDay: card.dueDay!,
+          owedNowMinor: Math.max(0, -card.balanceMinor),
+          charges: cardCharges.get(card.id) ?? [],
+        },
+        today,
+        windowEnd,
+      ),
+    );
   }
 
   const salaryPeriod = computeSalaryPeriod({ today, savingsMinor, salaryEvents, costEvents });

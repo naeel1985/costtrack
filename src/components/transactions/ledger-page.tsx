@@ -75,7 +75,13 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
   // A card's balance is negative; what's owed is its magnitude.
   const cards = accounts
     .filter((a) => a.type === "credit_card")
-    .map((a) => ({ id: a.id, name: a.name, owedMinor: Math.max(0, -a.balanceMinor) }));
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      owedMinor: Math.max(0, -a.balanceMinor),
+      limitMinor: a.creditLimitMinor ?? null,
+      dueDay: a.dueDay ?? null,
+    }));
 
   const creditRows = rows.filter((r) => r.method === "credit_card");
   const debitRows = rows.filter((r) => r.method === "debit_card");

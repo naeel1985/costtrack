@@ -36,6 +36,7 @@ export function decryptAccount(a: Raw, dek: Buffer) {
     currency: a.currency as string,
     openingBalanceMinor: decInt(a.openingBalanceEnc as string, dek),
     safetyBufferMinor: decInt(a.safetyBufferEnc as string, dek),
+    creditLimitMinor: a.creditLimitEnc ? decInt(a.creditLimitEnc as string, dek) : null,
     color: a.color as string,
     isArchived: a.isArchived as boolean,
     isSystem: (a.isSystem as boolean | undefined) ?? false,

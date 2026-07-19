@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cardCycleCosts, dueDateIn, nextDueDate } from "./card-cycle";
+import { cardCycleBills, dueDateIn, nextDueDate } from "./card-cycle";
 
 const d = (iso: string) => new Date(`${iso}T00:00:00`);
 const ymd = (date: Date) =>
@@ -12,7 +12,6 @@ describe("dueDateIn", () => {
   });
 
   it("clamps to the last day in short months", () => {
-    // A card due on the 31st is due 28 Feb — never spills into March.
     expect(ymd(dueDateIn(d("2027-02-10"), 31))).toBe("2027-02-28");
     expect(ymd(dueDateIn(d("2026-09-10"), 31))).toBe("2026-09-30");
   });
@@ -36,77 +35,97 @@ describe("nextDueDate", () => {
   });
 });
 
-describe("cardCycleCosts", () => {
-  it("bills costs on the due date closing their cycle", () => {
-    // Today 16 Jul, due day 15. Spend on 20 Jul falls in the cycle
-    // (15 Jul, 15 Aug] -> payable 15 Aug, not immediately.
-    const events = cardCycleCosts(
-      {
-        dueDay: 15,
-        owedMinor: aed(500),
-        costs: [{ date: d("2026-07-20"), amountMinor: aed(500) }],
-      },
-      d("2026-07-16"),
-      d("2026-10-16"),
-    );
-    expect(events).toHaveLength(1);
-    expect(ymd(events[0].date)).toBe("2026-08-15");
-    expect(events[0].amountMinor).toBe(aed(500));
+describe("cardCycleBills", () => {
+  const from = d("2026-07-16");
+  const to = d("2026-12-16");
+
+  it("bills the current balance on the next upcoming due date", () => {
+    // Today 16 Jul, due day 2 -> next due 2 Aug (16 Jul is past 2 Jul).
+    const bills = cardCycleBills({ dueDay: 2, owedNowMinor: aed(3_000), charges: [] }, from, to);
+    expect(bills).toHaveLength(1);
+    expect(ymd(bills[0].date)).toBe("2026-08-02");
+    expect(bills[0].amountMinor).toBe(aed(3_000));
   });
 
-  it("separates spend either side of a due date into different bills", () => {
-    const events = cardCycleCosts(
+  it("matches the user's example: a cost on 20 Jul (due day 2) is paid 2 Aug", () => {
+    const bills = cardCycleBills(
+      { dueDay: 2, owedNowMinor: 0, charges: [{ date: d("2026-07-20"), amountMinor: aed(500) }] },
+      from,
+      to,
+    );
+    expect(bills).toHaveLength(1);
+    expect(ymd(bills[0].date)).toBe("2026-08-02");
+    expect(bills[0].amountMinor).toBe(aed(500));
+  });
+
+  it("separates charges either side of a due date into different statements", () => {
+    const bills = cardCycleBills(
       {
-        dueDay: 15,
-        owedMinor: aed(900),
-        costs: [
-          { date: d("2026-07-20"), amountMinor: aed(400) }, // cycle -> 15 Aug
-          { date: d("2026-08-20"), amountMinor: aed(500) }, // cycle -> 15 Sep
+        dueDay: 2,
+        owedNowMinor: 0,
+        charges: [
+          { date: d("2026-07-20"), amountMinor: aed(400) }, // (2 Jul, 2 Aug] -> 2 Aug
+          { date: d("2026-08-10"), amountMinor: aed(600) }, // (2 Aug, 2 Sep] -> 2 Sep
         ],
       },
-      d("2026-07-16"),
-      d("2026-10-16"),
+      from,
+      to,
     );
-    expect(events.map((e) => [ymd(e.date), e.amountMinor])).toEqual([
-      ["2026-08-15", aed(400)],
-      ["2026-09-15", aed(500)],
+    expect(bills.map((b) => [ymd(b.date), b.amountMinor])).toEqual([
+      ["2026-08-02", aed(400)],
+      ["2026-09-02", aed(600)],
     ]);
   });
 
-  it("charges already-closed (overdue) balance at the next due date", () => {
-    // 3,000 owed from cycles that closed before today, and nothing new charged.
-    const events = cardCycleCosts(
-      { dueDay: 15, owedMinor: aed(3_000), costs: [] },
-      d("2026-07-16"),
-      d("2026-10-16"),
+  it("merges the current balance and same-cycle charges onto one statement", () => {
+    const bills = cardCycleBills(
+      {
+        dueDay: 2,
+        owedNowMinor: aed(1_000),
+        charges: [{ date: d("2026-07-25"), amountMinor: aed(250) }],
+      },
+      from,
+      to,
     );
-    expect(ymd(events[0].date)).toBe("2026-08-15");
-    expect(events[0].amountMinor).toBe(aed(3_000));
-    expect(events).toHaveLength(1);
+    expect(bills).toHaveLength(1);
+    expect(ymd(bills[0].date)).toBe("2026-08-02");
+    expect(bills[0].amountMinor).toBe(aed(1_250));
   });
 
-  it("reconciles: total billed equals what is owed", () => {
-    const owed = aed(4_780.5 / 1); // arbitrary carried balance
-    const events = cardCycleCosts(
-      {
-        dueDay: 15,
-        owedMinor: owed + aed(600),
-        costs: [{ date: d("2026-07-20"), amountMinor: aed(600) }],
-      },
-      d("2026-07-16"),
-      d("2026-12-16"),
+  it("bills a recurring charge that repeats for N months as N separate statements", () => {
+    // A 300/mo recurring cost on the 10th, four occurrences.
+    const charges = [
+      { date: d("2026-08-10"), amountMinor: aed(300) },
+      { date: d("2026-09-10"), amountMinor: aed(300) },
+      { date: d("2026-10-10"), amountMinor: aed(300) },
+      { date: d("2026-11-10"), amountMinor: aed(300) },
+    ];
+    const bills = cardCycleBills({ dueDay: 2, owedNowMinor: 0, charges }, from, to);
+    expect(bills.map((b) => ymd(b.date))).toEqual([
+      "2026-09-02",
+      "2026-10-02",
+      "2026-11-02",
+      "2026-12-02",
+    ]);
+    expect(bills.every((b) => b.amountMinor === aed(300))).toBe(true);
+  });
+
+  it("ignores charges billed beyond the window", () => {
+    const bills = cardCycleBills(
+      { dueDay: 2, owedNowMinor: 0, charges: [{ date: d("2027-06-01"), amountMinor: aed(999) }] },
+      from,
+      to,
     );
-    expect(events.reduce((s, e) => s + e.amountMinor, 0)).toBe(owed + aed(600));
+    expect(bills).toHaveLength(0);
   });
 
   it("emits nothing when the card is clear", () => {
-    expect(cardCycleCosts({ dueDay: 15, owedMinor: 0, costs: [] }, d("2026-07-16"), d("2026-12-16")))
-      .toHaveLength(0);
+    expect(cardCycleBills({ dueDay: 2, owedNowMinor: 0, charges: [] }, from, to)).toHaveLength(0);
   });
 
   it("emits nothing without a usable due day", () => {
     expect(
-      cardCycleCosts({ dueDay: 0, owedMinor: aed(100), costs: [] }, d("2026-07-16"), d("2026-12-16")),
+      cardCycleBills({ dueDay: 0, owedNowMinor: aed(100), charges: [] }, from, to),
     ).toHaveLength(0);
   });
 });

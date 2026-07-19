@@ -142,6 +142,9 @@ model Account {
   currency          String   @default("AED")
   openingBalanceEnc String // encrypted minor units
   safetyBufferEnc   String // encrypted minor units
+  // Credit cards only: the borrowing limit (encrypted minor units). Available
+  // credit = limit − amount owed. Null for non-card accounts.
+  creditLimitEnc    String?
   color             String   @default("#64748b")
   isArchived        Boolean  @default(false)
   // Auto-managed accounts the user never creates directly — currently the

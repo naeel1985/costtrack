@@ -28,6 +28,7 @@ interface FormValues {
   safetyBuffer: string;
   color: string;
   dueDay: string;
+  creditLimit: string;
 }
 
 export interface AccountInitial {
@@ -39,6 +40,7 @@ export interface AccountInitial {
   safetyBufferMinor?: number;
   color?: string;
   dueDay?: number | null;
+  creditLimitMinor?: number | null;
 }
 
 export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onDone?: () => void }) {
@@ -58,6 +60,7 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
       safetyBuffer: initial?.safetyBufferMinor != null ? String(initial.safetyBufferMinor / 100) : "0",
       color: initial?.color ?? COLORS[0],
       dueDay: initial?.dueDay != null ? String(initial.dueDay) : "",
+      creditLimit: initial?.creditLimitMinor != null ? String(initial.creditLimitMinor / 100) : "",
     },
   });
   const color = watch("color");
@@ -69,6 +72,9 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
       const res = await saveAccount({
         id: initial?.id,
         ...v,
+        // A card's balance starts at zero owed; the entered figure is its limit.
+        openingBalance: v.type === "credit_card" ? "0" : v.openingBalance,
+        creditLimit: v.type === "credit_card" && v.creditLimit !== "" ? v.creditLimit : null,
         // Only cards carry a due day.
         dueDay: v.type === "credit_card" && v.dueDay !== "" ? v.dueDay : null,
       });
@@ -115,9 +121,20 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <Field label={isCard ? "Opening balance owed" : "Opening balance"} hint={watch("currency")}>
-          <Input inputMode="decimal" className="tabular" {...register("openingBalance")} />
-        </Field>
+        {isCard ? (
+          <Field label="Maximum limit" hint={watch("currency")}>
+            <Input
+              inputMode="decimal"
+              placeholder="e.g. 20000"
+              className="tabular"
+              {...register("creditLimit")}
+            />
+          </Field>
+        ) : (
+          <Field label="Opening balance" hint={watch("currency")}>
+            <Input inputMode="decimal" className="tabular" {...register("openingBalance")} />
+          </Field>
+        )}
         {isCard ? (
           <Field
             label="Payment due day"
@@ -126,7 +143,7 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
           >
             <Input
               inputMode="numeric"
-              placeholder="e.g. 15"
+              placeholder="e.g. 2"
               className="tabular"
               {...register("dueDay", {
                 required: "Choose the day of the month the card is due",
@@ -143,9 +160,9 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
       </div>
       {isCard && (
         <p className="-mt-2 text-xs text-muted-foreground">
-          Costs charged between two due dates form one bill, payable on the closing due date — that
-          is when it hits your free savings. A day past the month&apos;s length (e.g. 31) falls on
-          the last day instead.
+          A credit card is a loan: spend up to the limit, then repay from cash/bank by the due day.
+          Costs charged between two due dates form one bill — that is when it hits your free savings.
+          A day past the month&apos;s length (e.g. 31) falls on the last day instead.
         </p>
       )}
       <Field label="Colour">

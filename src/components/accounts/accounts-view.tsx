@@ -38,6 +38,8 @@ export interface AccountRow {
   safetyBufferMinor: number;
   /** Credit cards only: day of the month the bill falls due. */
   dueDay?: number | null;
+  /** Credit cards only: the borrowing limit. */
+  creditLimitMinor?: number | null;
   color: string;
   isArchived: boolean;
 }
@@ -123,6 +125,7 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
                           safetyBufferMinor: a.safetyBufferMinor,
                           color: a.color,
                           dueDay: a.dueDay,
+                          creditLimitMinor: a.creditLimitMinor,
                         });
                         setOpen(true);
                       }}
@@ -145,19 +148,62 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              <div className="mt-3 flex items-end justify-between">
-                <Money
-                  minor={a.balanceMinor}
-                  currency={a.currency}
-                  colored={a.balanceMinor < 0}
-                  className="text-xl font-semibold"
-                />
-                {a.safetyBufferMinor > 0 && (
-                  <Badge variant={a.balanceMinor < a.safetyBufferMinor ? "warning" : "neutral"} className="gap-1">
-                    buffer <Money minor={a.safetyBufferMinor} currency={a.currency} showCurrency={false} />
-                  </Badge>
-                )}
-              </div>
+              {a.type === "credit_card" ? (
+                (() => {
+                  const owed = Math.max(0, -a.balanceMinor);
+                  const limit = a.creditLimitMinor ?? null;
+                  const available = limit != null ? Math.max(0, limit - owed) : null;
+                  const overLimit = limit != null && owed > limit;
+                  return (
+                    <div className="mt-3 space-y-2">
+                      <div className="flex items-end justify-between">
+                        <div>
+                          <div className="text-xs text-muted-foreground">Owed</div>
+                          <Money
+                            minor={owed}
+                            currency={a.currency}
+                            colored={owed > 0}
+                            className="text-xl font-semibold"
+                          />
+                        </div>
+                        {a.dueDay != null && (
+                          <Badge variant="neutral" className="gap-1">
+                            due day {a.dueDay}
+                          </Badge>
+                        )}
+                      </div>
+                      {limit != null && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">
+                            Available of <Money minor={limit} currency={a.currency} showCurrency={false} />
+                          </span>
+                          <span className={overLimit ? "font-medium text-negative" : "font-medium"}>
+                            {overLimit ? (
+                              "Over limit"
+                            ) : (
+                              <Money minor={available ?? 0} currency={a.currency} showCurrency={false} />
+                            )}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="mt-3 flex items-end justify-between">
+                  <Money
+                    minor={a.balanceMinor}
+                    currency={a.currency}
+                    colored={a.balanceMinor < 0}
+                    className="text-xl font-semibold"
+                  />
+                  {a.safetyBufferMinor > 0 && (
+                    <Badge variant={a.balanceMinor < a.safetyBufferMinor ? "warning" : "neutral"} className="gap-1">
+                      buffer <Money minor={a.safetyBufferMinor} currency={a.currency} showCurrency={false} />
+                    </Badge>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}

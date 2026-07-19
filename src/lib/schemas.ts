@@ -33,6 +33,10 @@ export const accountSchema = z
     dueDay: z
       .union([z.coerce.number().int().min(1, "Day must be 1–31").max(31, "Day must be 1–31"), z.null()])
       .optional(),
+    // Credit cards only: the borrowing limit.
+    creditLimit: z
+      .union([z.coerce.number().finite().min(0), z.null()])
+      .optional(),
   })
   .refine((d) => d.type !== "credit_card" || d.dueDay != null, {
     message: "Choose the day of the month the card is due",

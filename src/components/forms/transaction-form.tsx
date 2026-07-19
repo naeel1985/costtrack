@@ -16,9 +16,16 @@ import {
 } from "@/components/ui/select";
 import { Field } from "./field";
 import { cn } from "@/lib/utils";
-import { saveTransaction } from "@/server/actions";
-import { EXPENSE_METHOD_LABELS, type ExpenseMethod, type TransactionType } from "@/lib/domain";
+import { saveRecurring, saveTransaction } from "@/server/actions";
+import {
+  EXPENSE_METHOD_LABELS,
+  type ExpenseMethod,
+  type RecurrenceFrequency,
+  type TransactionType,
+} from "@/lib/domain";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
+
+type RepeatMode = "one_time" | "recurring";
 
 interface FormValues {
   type: TransactionType;
@@ -30,7 +37,17 @@ interface FormValues {
   categoryId: string;
   note: string;
   tags: string;
+  repeat: RepeatMode;
+  frequency: RecurrenceFrequency;
+  occurrenceCount: string;
 }
+
+const FREQUENCY_LABELS: Record<RecurrenceFrequency, string> = {
+  weekly: "week",
+  monthly: "month",
+  yearly: "year",
+  custom: "period",
+};
 
 export interface TransactionInitial {
   id?: string;
@@ -95,13 +112,22 @@ export function TransactionForm({
       categoryId: initial?.categoryId ?? "",
       note: initial?.note ?? "",
       tags: initial?.tagList?.join(", ") ?? "",
+      repeat: "one_time",
+      frequency: "monthly",
+      occurrenceCount: "",
     },
   });
 
   const type = watch("type");
   const method = watch("method");
+  const repeat = watch("repeat");
+  const frequency = watch("frequency");
   const isCreditCard = type === "expense" && method === "credit_card";
   const pickableAccounts = isCreditCard ? creditCards : assetAccounts;
+  // Recurring is offered for income and expenses (incl. credit-card costs), and
+  // never when editing an existing one-off, or for transfers.
+  const canRepeat = !initial?.id && type !== "transfer";
+  const isRecurring = canRepeat && repeat === "recurring";
 
   const accountId = watch("accountId");
   const account = accounts.find((a) => a.id === accountId);
@@ -122,6 +148,39 @@ export function TransactionForm({
 
   function submit(values: FormValues) {
     startTransition(async () => {
+      // Recurring income / cost → a rule (repeats each period, optionally for a
+      // fixed number of cycles). Credit-card recurring costs need a real card.
+      if (canRepeat && values.repeat === "recurring") {
+        if (values.type === "expense" && values.method === "credit_card" && !values.accountId) {
+          toast.error("Add a credit card first (Accounts page) to set a recurring card cost.");
+          return;
+        }
+        const catName = categories.find((c) => c.id === values.categoryId)?.name;
+        const name =
+          (values.note || catName || (values.type === "income" ? "Recurring income" : "Recurring cost"))
+            .slice(0, 80);
+        const res = await saveRecurring({
+          type: values.type,
+          name,
+          frequency: values.frequency,
+          interval: 1,
+          startDate: values.date,
+          occurrenceCount: values.occurrenceCount ? Number(values.occurrenceCount) : null,
+          amount: values.amount,
+          currency,
+          accountId: values.accountId,
+          categoryId: values.categoryId || null,
+          note: values.note || null,
+        });
+        if (res.ok) {
+          toast.success("Recurring item added");
+          onDone?.();
+        } else {
+          toast.error(res.error);
+        }
+        return;
+      }
+
       const res = await saveTransaction({
         id: initial?.id,
         type: values.type,
@@ -241,8 +300,8 @@ export function TransactionForm({
 
       {isCreditCard && (
         <p className="-mt-2 text-xs text-muted-foreground">
-          Adds to the card&apos;s balance owed — no cash account is touched until you record a
-          payment.
+          Adds to the card&apos;s balance owed — repaid from cash/bank on the card&apos;s due date,
+          which is when it reaches your free savings.
         </p>
       )}
 
@@ -287,9 +346,70 @@ export function TransactionForm({
         <Input id="note" placeholder="What was it for?" {...register("note")} />
       </Field>
 
-      <Field label="Tags" htmlFor="tags" hint="comma separated">
-        <Input id="tags" placeholder="weekly, work" {...register("tags")} />
-      </Field>
+      {!isRecurring && (
+        <Field label="Tags" htmlFor="tags" hint="comma separated">
+          <Input id="tags" placeholder="weekly, work" {...register("tags")} />
+        </Field>
+      )}
+
+      {/* One-time vs recurring — income and costs (incl. credit-card) */}
+      {canRepeat && (
+        <div className="space-y-3 rounded-lg border bg-muted/30 p-3">
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+            {(["one_time", "recurring"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setValue("repeat", m)}
+                className={cn(
+                  "rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
+                  repeat === m
+                    ? "bg-card shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {m === "one_time" ? "One-time" : "Recurring"}
+              </button>
+            ))}
+          </div>
+
+          {isRecurring && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Repeats every">
+                <Select value={frequency} onValueChange={(v) => setValue("frequency", v as RecurrenceFrequency)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="monthly">Month</SelectItem>
+                    <SelectItem value="weekly">Week</SelectItem>
+                    <SelectItem value="yearly">Year</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field
+                label={isCreditCard ? "For how many cycles" : `For how many ${FREQUENCY_LABELS[frequency]}s`}
+                hint="blank = ongoing"
+              >
+                <Input
+                  inputMode="numeric"
+                  placeholder="e.g. 6"
+                  className="tabular"
+                  {...register("occurrenceCount")}
+                />
+              </Field>
+            </div>
+          )}
+
+          {isRecurring && (
+            <p className="text-xs text-muted-foreground">
+              {isCreditCard
+                ? `Charges the card ${FREQUENCY_LABELS[frequency]}ly; each charge is repaid on the card's due date.`
+                : `Adds automatically every ${FREQUENCY_LABELS[frequency]} from the start date.`}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="flex justify-end gap-2 pt-1">
         {onDone && (
@@ -298,7 +418,13 @@ export function TransactionForm({
           </Button>
         )}
         <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : initial?.id ? "Save changes" : "Add transaction"}
+          {pending
+            ? "Saving…"
+            : initial?.id
+              ? "Save changes"
+              : isRecurring
+                ? "Add recurring"
+                : "Add transaction"}
         </Button>
       </div>
     </form>

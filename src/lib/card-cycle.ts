@@ -1,14 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Credit-card statement cycles — pure, date-fns only, unit-tested.
 //
-// A card bill is not owed continuously; it falls due on one day each month.
-// Costs charged BETWEEN two consecutive due dates form one statement cycle and
-// are payable on the closing due date. That's what makes free savings honest:
-// the money leaves on the day you actually pay the card, not when you swipe it.
+// A credit card is a loan: you spend on it now and repay the bank on a fixed day
+// each month. Costs charged BETWEEN two consecutive due dates form one statement
+// cycle, payable on the closing due date — e.g. with a due day of the 2nd, every
+// cost from 2 Jul to 2 Aug is paid on 2 Aug. That repayment is when cash actually
+// leaves your accounts, so it's what the free-savings projection should feel.
 //
-// Anything still owed from cycles that already closed is overdue — it can't be
-// attributed to a future cycle, so it's charged at the next due date rather
-// than silently dropped.
+// `cardCycleBills` turns a card into dated repayment events:
+//   • each FUTURE charge is billed on the due date closing its cycle, so a
+//     recurring cost that repeats for N months produces N charges, each landing
+//     on its own statement;
+//   • whatever is ALREADY owed today is due on the next upcoming due date.
 //
 // All amounts are integer minor units, POSITIVE magnitudes.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -16,13 +19,13 @@
 import { addMonths, getDaysInMonth, isAfter, setDate, startOfDay } from "date-fns";
 import type { DatedAmount } from "./salary-period";
 
-export interface CardCycleInput {
+export interface CardBillInput {
   /** Day of the month the bill falls due (1–31). */
   dueDay: number;
-  /** Everything currently unpaid on the card (its negative balance, magnitude). */
-  owedMinor: number;
-  /** Card costs, used to attribute spend to the cycle it belongs to. */
-  costs: DatedAmount[];
+  /** Amount already owed today (the card's negative balance, as a magnitude). */
+  owedNowMinor: number;
+  /** Future charges to the card (recurring occurrences, scheduled spend). */
+  charges: DatedAmount[];
 }
 
 /**
@@ -42,47 +45,43 @@ export function nextDueDate(from: Date, dueDay: number): Date {
 }
 
 /**
- * Turn a card into dated cost events — one per due date in [from, to].
+ * Repayment events for a card across [from, to].
  *
- * Each event carries the costs charged in the cycle closing on that date
- * (previous due date, this due date]. The first event additionally carries any
- * balance left over from cycles that already closed, so the total charged
- * across the window reconciles with what's actually owed.
+ * Each future charge is billed on the due date that closes its cycle (the first
+ * due date on or after the charge). The amount owed today is billed on the first
+ * upcoming due date. Bills with no money on them are dropped.
  */
-export function cardCycleCosts(card: CardCycleInput, from: Date, to: Date): DatedAmount[] {
+export function cardCycleBills(card: CardBillInput, from: Date, to: Date): DatedAmount[] {
   const start = startOfDay(from);
   const end = startOfDay(to);
   if (!Number.isFinite(card.dueDay) || card.dueDay < 1) return [];
 
-  // Walk the due dates inside the window.
-  const dueDates: Date[] = [];
-  let cursor = nextDueDate(start, card.dueDay);
-  for (let i = 0; i < 400 && !isAfter(cursor, end); i++) {
-    dueDates.push(cursor);
-    cursor = dueDateIn(addMonths(cursor, 1), card.dueDay);
+  const firstDue = nextDueDate(start, card.dueDay);
+  if (isAfter(firstDue, end)) return [];
+
+  // Accumulate by due-date epoch, so charges sharing a statement merge.
+  const byDue = new Map<number, number>();
+  const add = (dueMs: number, amount: number) => {
+    if (amount <= 0) return;
+    byDue.set(dueMs, (byDue.get(dueMs) ?? 0) + amount);
+  };
+
+  // Current balance is due at the first upcoming statement.
+  add(firstDue.getTime(), Math.max(0, card.owedNowMinor));
+
+  // Each future charge lands on the due date closing its cycle.
+  for (const c of card.charges) {
+    const amount = Math.max(0, c.amountMinor);
+    if (amount <= 0) continue;
+    const chargeDate = startOfDay(c.date);
+    if (isAfter(start, chargeDate)) continue; // already reflected in owedNow
+    const due = nextDueDate(chargeDate, card.dueDay);
+    if (isAfter(due, end)) continue; // billed beyond the window
+    add(due.getTime(), amount);
   }
-  if (dueDates.length === 0) return [];
 
-  const events: DatedAmount[] = [];
-  let attributed = 0;
-
-  for (const due of dueDates) {
-    const cycleStart = dueDateIn(addMonths(due, -1), card.dueDay);
-    // (cycleStart, due] — the cycle closing on this due date.
-    const cycleCosts = card.costs
-      .filter((c) => {
-        const d = startOfDay(c.date).getTime();
-        return d > cycleStart.getTime() && d <= due.getTime();
-      })
-      .reduce((s, c) => s + Math.max(0, c.amountMinor), 0);
-    attributed += cycleCosts;
-    events.push({ date: due, amountMinor: cycleCosts });
-  }
-
-  // Whatever is owed but wasn't attributed to a cycle in the window already
-  // closed — it's overdue, so it lands on the next due date.
-  const overdue = Math.max(0, card.owedMinor - attributed);
-  if (overdue > 0) events[0].amountMinor += overdue;
-
-  return events.filter((e) => e.amountMinor > 0);
+  return [...byDue.entries()]
+    .filter(([, amount]) => amount > 0)
+    .sort((a, b) => a[0] - b[0])
+    .map(([dueMs, amountMinor]) => ({ date: new Date(dueMs), amountMinor }));
 }

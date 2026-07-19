@@ -25,6 +25,7 @@ import { Field } from "@/components/forms/field";
 import { Money } from "@/components/money";
 import { TransactionForm } from "@/components/forms/transaction-form";
 import { recordCreditCardPayment } from "@/server/actions";
+import { cn } from "@/lib/utils";
 import type { TxRow } from "./transactions-view";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
@@ -58,6 +59,8 @@ export interface CreditCardLite {
   id: string;
   name: string;
   owedMinor: number;
+  limitMinor?: number | null;
+  dueDay?: number | null;
 }
 
 export function CreditCardSection({
@@ -113,17 +116,37 @@ export function CreditCardSection({
           </div>
         </div>
 
-        {/* Per-card breakdown, once there's more than one card */}
-        {cards.length > 1 && (
-          <ul className="mb-3 space-y-1.5">
-            {cards.map((c) => (
-              <li key={c.id} className="flex items-center justify-between text-sm">
-                <span className="truncate text-muted-foreground">{c.name}</span>
-                <Money minor={c.owedMinor} currency={currency} className="font-medium" />
+        {/* Per-card breakdown: owed, plus available credit and due day. */}
+        <ul className="mb-3 space-y-1.5">
+          {cards.map((c) => {
+            const available = c.limitMinor != null ? Math.max(0, c.limitMinor - c.owedMinor) : null;
+            const overLimit = c.limitMinor != null && c.owedMinor > c.limitMinor;
+            return (
+              <li key={c.id} className="flex items-center justify-between gap-3 text-sm">
+                <span className="min-w-0 truncate">
+                  {c.name}
+                  {c.dueDay != null && (
+                    <span className="text-muted-foreground"> · due day {c.dueDay}</span>
+                  )}
+                </span>
+                <span className="flex shrink-0 items-center gap-2">
+                  {c.limitMinor != null && (
+                    <span className={cn("text-xs", overLimit ? "text-negative" : "text-muted-foreground")}>
+                      {overLimit ? (
+                        "over limit"
+                      ) : (
+                        <>
+                          <Money minor={available ?? 0} currency={currency} showCurrency={false} /> left
+                        </>
+                      )}
+                    </span>
+                  )}
+                  <Money minor={c.owedMinor} currency={currency} className="font-medium" />
+                </span>
               </li>
-            ))}
-          </ul>
-        )}
+            );
+          })}
+        </ul>
 
         <CostList rows={rows} empty="No credit-card costs yet. Add one — it accumulates as debt." />
       </CardContent>
