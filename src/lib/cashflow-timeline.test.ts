@@ -114,6 +114,41 @@ describe("buildCashflowTimeline — daily free savings", () => {
     expect(p.freeSavingsMinor).toBe(aed(10_000) + p.cumIncomeMinor - p.cumCostsMinor);
   });
 
+  it("exposes per-day income and costs for the daily distribution chart", () => {
+    const t = buildCashflowTimeline({
+      ...base,
+      months: 3,
+      incomeEvents: [{ date: d("2026-07-25"), amountMinor: aed(20_000) }],
+      costEvents: [{ date: d("2026-07-20"), amountMinor: aed(6_000) }],
+    });
+    const at = (iso: string) => t.daily.find((p) => p.t === d(iso).getTime())!;
+    expect(at("2026-07-20")).toMatchObject({ dayCostsMinor: aed(6_000), dayIncomeMinor: 0 });
+    expect(at("2026-07-25")).toMatchObject({ dayIncomeMinor: aed(20_000), dayCostsMinor: 0 });
+    expect(at("2026-07-21")).toMatchObject({ dayCostsMinor: 0, dayIncomeMinor: 0 });
+  });
+
+  it("labels the credit-card portion of costs without double-counting it", () => {
+    const t = buildCashflowTimeline({
+      ...base,
+      months: 3,
+      // A card bill and an ordinary cost both fall in July; the bill is a subset
+      // of costEvents and is only labelled, never re-added.
+      costEvents: [
+        { date: d("2026-07-20"), amountMinor: aed(6_000) },
+        { date: d("2026-08-03"), amountMinor: aed(1_500) }, // the card bill
+      ],
+      cardBillEvents: [{ date: d("2026-08-03"), amountMinor: aed(1_500) }],
+    });
+    const jul = t.months.find((m) => m.key === "2026-07")!;
+    const aug = t.months.find((m) => m.key === "2026-08")!;
+    expect(jul.costsMinor).toBe(aed(6_000));
+    expect(jul.cardBillsMinor).toBe(0);
+    expect(aug.costsMinor).toBe(aed(1_500)); // not 3,000 — no double count
+    expect(aug.cardBillsMinor).toBe(aed(1_500));
+    const dueDay = t.daily.find((p) => p.t === d("2026-08-03").getTime())!;
+    expect(dueDay).toMatchObject({ dayCostsMinor: aed(1_500), dayCardBillsMinor: aed(1_500) });
+  });
+
   it("can go negative when costs outrun savings and income", () => {
     const t = buildCashflowTimeline({
       ...base,

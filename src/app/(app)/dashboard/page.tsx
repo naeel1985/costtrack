@@ -96,7 +96,11 @@ export default async function DashboardPage() {
       {/* The forward view: the shape of the year, and what's actually free. */}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <IncomeVsCostsCard months={timeline.months} currency={baseCurrency} />
+          <IncomeVsCostsCard
+            months={timeline.months}
+            daily={timeline.daily}
+            currency={baseCurrency}
+          />
         </div>
         <SalaryPeriodCard
           period={salaryPeriod}

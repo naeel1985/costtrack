@@ -82,6 +82,10 @@ export function CreditCardSection({
   const [addOpen, setAddOpen] = React.useState(false);
   const [payOpen, setPayOpen] = React.useState(false);
   const owedMinor = cards.reduce((s, c) => s + c.owedMinor, 0);
+  // Total Amount Due this cycle: the sum of each card's current (issued but
+  // unpaid) statement bill.
+  const dueMinor = cards.reduce((s, c) => s + (c.totalAmountDueMinor ?? 0), 0);
+  const hasStatements = cards.some((c) => c.paymentDueDate != null);
   const monthTotal = rows
     .filter((r) => new Date(r.date).getMonth() === new Date().getMonth())
     .reduce((s, r) => s + r.amountMinor, 0);
@@ -102,8 +106,8 @@ export function CreditCardSection({
         </div>
       </CardHeader>
       <CardContent className="pt-0">
-        <div className="mb-3 flex items-end justify-between rounded-lg bg-muted/50 px-4 py-3">
-          <div>
+        <div className="mb-3 grid grid-cols-2 gap-3">
+          <div className="rounded-lg bg-muted/50 px-4 py-3">
             <div className="text-xs text-muted-foreground">
               Total owed{cards.length > 1 ? ` · ${cards.length} cards` : ""}
             </div>
@@ -112,14 +116,20 @@ export function CreditCardSection({
               currency={currency}
               className="text-2xl font-bold text-[#7c3aed]"
             />
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              Added this month <Money minor={monthTotal} currency={currency} showCurrency={false} />
+            </div>
           </div>
-          <div className="text-right">
-            <div className="text-xs text-muted-foreground">Added this month</div>
-            <Money minor={monthTotal} currency={currency} className="text-sm font-semibold" />
+          <div className="rounded-lg border border-[#7c3aed]/25 bg-[#7c3aed]/5 px-4 py-3">
+            <div className="text-xs text-muted-foreground">Total amount due (this cycle)</div>
+            <Money minor={dueMinor} currency={currency} className="text-2xl font-bold" />
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {hasStatements ? "Current issued statements" : "Set due days to bill statements"}
+            </div>
           </div>
         </div>
 
-        {/* Per-card breakdown: owed + available credit, then the next statement. */}
+        {/* Per-card breakdown: owed + available credit, then the current statement. */}
         <ul className="mb-3 space-y-2.5">
           {cards.map((c) => {
             const available = c.limitMinor != null ? Math.max(0, c.limitMinor - c.owedMinor) : null;
@@ -144,19 +154,19 @@ export function CreditCardSection({
                   </span>
                 </div>
                 {c.paymentDueDate && c.statementDate ? (
-                  <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>
-                      Statement {format(new Date(c.statementDate), "d MMM")} · pay{" "}
-                      {format(new Date(c.paymentDueDate), "d MMM")}
-                    </span>
-                    <span>
-                      due{" "}
-                      <Money
-                        minor={c.totalAmountDueMinor ?? 0}
-                        currency={currency}
-                        className="font-medium text-foreground"
-                      />
-                    </span>
+                  <div className="mt-1.5 flex items-end justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-1.5">
+                    <div className="text-xs text-muted-foreground">
+                      <div className="font-medium text-foreground">Total amount due</div>
+                      <div>
+                        Statement {format(new Date(c.statementDate), "d MMM")} · pay by{" "}
+                        {format(new Date(c.paymentDueDate), "d MMM")}
+                      </div>
+                    </div>
+                    <Money
+                      minor={c.totalAmountDueMinor ?? 0}
+                      currency={currency}
+                      className="text-base font-semibold text-[#7c3aed]"
+                    />
                   </div>
                 ) : (
                   c.dueDay == null && (

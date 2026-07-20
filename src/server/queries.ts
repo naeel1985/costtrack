@@ -386,18 +386,21 @@ async function loadForwardView(
 
   // Each card's current balance + future charges become repayment events on the
   // due dates — this is where credit-card spending finally hits free savings.
+  // They go into costEvents (for the maths) and into cardBillEvents (so the
+  // dashboard can show the "Total Amount Due" spike landing on each due date).
+  const cardBillEvents: DatedAmount[] = [];
   for (const card of cards) {
-    costEvents.push(
-      ...cardCycleBills(
-        {
-          dueDay: card.dueDay!,
-          owedNowMinor: Math.max(0, -card.balanceMinor),
-          charges: cardCharges.get(card.id) ?? [],
-        },
-        today,
-        windowEnd,
-      ),
+    const bills = cardCycleBills(
+      {
+        dueDay: card.dueDay!,
+        owedNowMinor: Math.max(0, -card.balanceMinor),
+        charges: cardCharges.get(card.id) ?? [],
+      },
+      today,
+      windowEnd,
     );
+    costEvents.push(...bills);
+    cardBillEvents.push(...bills);
   }
 
   const salaryPeriod = computeSalaryPeriod({ today, savingsMinor, salaryEvents, costEvents });
@@ -406,6 +409,7 @@ async function loadForwardView(
     savingsMinor,
     incomeEvents,
     costEvents,
+    cardBillEvents,
     months: TIMELINE_MONTHS,
   });
 
