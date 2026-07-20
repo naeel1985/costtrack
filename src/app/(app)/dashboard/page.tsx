@@ -97,7 +97,7 @@ export default async function DashboardPage() {
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <IncomeVsCostsCard
-            months={timeline.months}
+            cycles={timeline.cycles}
             daily={timeline.daily}
             currency={baseCurrency}
           />

@@ -18,13 +18,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Money } from "@/components/money";
 import { formatMoney } from "@/lib/money";
 import { cn } from "@/lib/utils";
-import type { FreeSavingsPoint, MonthBucket } from "@/lib/cashflow-timeline";
+import type { CycleBucket, FreeSavingsPoint } from "@/lib/cashflow-timeline";
 
-/** Configurable horizons, in months. */
+/** Configurable horizons — number of salary cycles to show. */
 const PERIODS = [3, 6, 9, 12] as const;
 type Period = (typeof PERIODS)[number];
 
-type Grain = "month" | "day";
+type Grain = "cycle" | "day";
 
 const SERIES = [
   { key: "incomeMinor", label: "Income", color: "var(--chart-income)" },
@@ -32,17 +32,17 @@ const SERIES = [
 ] as const;
 
 export function IncomeVsCostsCard({
-  months,
+  cycles,
   daily,
   currency,
 }: {
-  months: MonthBucket[];
+  cycles: CycleBucket[];
   daily: FreeSavingsPoint[];
   currency: string;
 }) {
   const [period, setPeriod] = React.useState<Period>(6);
-  const [grain, setGrain] = React.useState<Grain>("month");
-  const data = months.slice(0, period);
+  const [grain, setGrain] = React.useState<Grain>("cycle");
+  const data = cycles.slice(0, period);
 
   const totalIncome = data.reduce((s, m) => s + m.incomeMinor, 0);
   const totalCosts = data.reduce((s, m) => s + m.costsMinor, 0);
@@ -56,8 +56,9 @@ export function IncomeVsCostsCard({
         <div>
           <CardTitle>Income vs costs</CardTitle>
           <p className="mt-1 text-sm text-muted-foreground">
-            Expected {grain === "day" ? "day by day" : "month by month"} — recurring income and
-            costs, scheduled spend, cheques due, provisions and credit-card bills on their due date.
+            Expected {grain === "day" ? "day by day" : "salary cycle by cycle"} — recurring income
+            and costs, scheduled spend, cheques due, provisions and credit-card bills on their due
+            date.
           </p>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
@@ -86,7 +87,7 @@ export function IncomeVsCostsCard({
             aria-label="Granularity"
             className="flex items-center gap-1 rounded-lg bg-muted p-1"
           >
-            {(["month", "day"] as const).map((g) => (
+            {(["cycle", "day"] as const).map((g) => (
               <button
                 key={g}
                 role="tab"
@@ -97,7 +98,7 @@ export function IncomeVsCostsCard({
                   grain === g ? "bg-card shadow-sm" : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {g === "month" ? "Monthly" : "Daily"}
+                {g === "cycle" ? "Cycle" : "Daily"}
               </button>
             ))}
           </div>
@@ -177,10 +178,10 @@ export function IncomeVsCostsCard({
                   cursor={{ fill: "var(--muted)", opacity: 0.5 }}
                   content={({ active, payload }) => {
                     if (!active || !payload?.length) return null;
-                    const m = payload[0].payload as MonthBucket;
+                    const m = payload[0].payload as CycleBucket;
                     return (
                       <div className="min-w-40 rounded-md border bg-popover px-3 py-2 text-xs shadow-md">
-                        <div className="mb-1.5 font-medium">{m.label}</div>
+                        <div className="mb-1.5 font-medium">{m.rangeLabel}</div>
                         {SERIES.map((s) => (
                           <div key={s.key} className="flex items-center justify-between gap-4">
                             <span className="flex items-center gap-1.5 text-muted-foreground">

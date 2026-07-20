@@ -73,7 +73,8 @@ export function FreeSavingsExplorer({
           <CalendarSearch className="h-4 w-4" /> Free savings on any date
         </CardTitle>
         <p className="mt-1 text-sm text-muted-foreground">
-          Drag the slider — or hover the graph — to any day in the next 12 months.
+          Projected = free savings today + income received by the chosen day − known costs by then.
+          Drag the slider or hover the graph to any day in the next 12 months.
         </p>
       </CardHeader>
 
@@ -195,8 +196,8 @@ export function FreeSavingsExplorer({
           {negative
             ? `On ${format(date, "d MMM yyyy")} your known costs outrun savings and income by ${formatMoney(Math.abs(point.freeSavingsMinor), currency)}.`
             : low.freeSavingsMinor < 0
-              ? `Dips to ${formatMoney(low.freeSavingsMinor, currency)} on ${format(new Date(low.t), "d MMM")} — savings plus income, minus every known cost to that date.`
-              : "Savings plus expected income, minus every known cost up to this date."}
+              ? `Dips to ${formatMoney(low.freeSavingsMinor, currency)} on ${format(new Date(low.t), "d MMM")} — free savings today, plus income, minus every known cost to that date.`
+              : "Free savings today, plus income received by this date, minus every known cost to it."}
         </p>
       </CardContent>
     </Card>

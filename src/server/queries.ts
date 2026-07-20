@@ -347,14 +347,16 @@ async function loadForwardView(
   // drops any that would land on an already-past due date.
   const cardChargeWindowStart = subMonths(today, 2);
 
-  // Salary defines the period boundaries: monthly income rules only.
+  // Salary defines the cycle boundaries: monthly income rules only. It's reserved
+  // to cover its own cycle's costs, so only its surplus becomes free savings.
   const salaryEvents: DatedAmount[] = rules
     .filter((r) => r.type === "income" && r.frequency === "monthly")
     .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
 
-  // All expected income (any cadence) for the income-vs-costs chart.
-  const incomeEvents: DatedAmount[] = rules
-    .filter((r) => r.type === "income")
+  // Every other income stream (any non-monthly cadence, scheduled income and
+  // received cheques) is pure free savings the moment it lands.
+  const otherIncomeEvents: DatedAmount[] = rules
+    .filter((r) => r.type === "income" && r.frequency !== "monthly")
     .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
 
   // Committed costs: recurring costs, scheduled spend, issued cheques due and
@@ -373,7 +375,7 @@ async function loadForwardView(
   for (const raw of rawScheduled) {
     const t = decryptTransaction(raw, dek);
     const e = { date: t.date, amountMinor: t.amountMinor };
-    if (t.type === "income") incomeEvents.push(e);
+    if (t.type === "income") otherIncomeEvents.push(e);
     else if (t.type === "expense") {
       if (cardIds.has(t.accountId)) pushCharge(t.accountId, e);
       else costEvents.push(e);
@@ -382,7 +384,7 @@ async function loadForwardView(
   for (const raw of rawPdcs) {
     const p = decryptPdc(raw, dek);
     if (p.direction === "issued") costEvents.push({ date: p.dueDate, amountMinor: p.amountMinor });
-    else incomeEvents.push({ date: p.dueDate, amountMinor: p.amountMinor });
+    else otherIncomeEvents.push({ date: p.dueDate, amountMinor: p.amountMinor });
   }
   for (const raw of rawProvisions) {
     const pr = decryptProvision(raw, dek);
@@ -414,7 +416,8 @@ async function loadForwardView(
   const timeline = buildCashflowTimeline({
     today,
     savingsMinor,
-    incomeEvents,
+    salaryEvents,
+    otherIncomeEvents,
     costEvents,
     cardBillEvents,
     months: TIMELINE_MONTHS,
