@@ -335,12 +335,17 @@ async function loadForwardView(
     .filter((a) => !a.isSystem && a.type !== "credit_card")
     .reduce((s, a) => s + a.balanceMinor, 0);
 
-  const expand = (r: (typeof rules)[number]) =>
+  const expandFrom = (r: (typeof rules)[number], from: Date) =>
     expandRecurrence(
       { frequency: r.frequency as never, interval: r.interval, startDate: r.startDate, endDate: r.endDate, occurrenceCount: r.occurrenceCount },
-      today,
+      from,
       windowEnd,
     );
+  const expand = (r: (typeof rules)[number]) => expandFrom(r, today);
+  // Card charges reach back two months so a recurring occurrence dated before
+  // today but still billing on the current statement is picked up; cardCycleBills
+  // drops any that would land on an already-past due date.
+  const cardChargeWindowStart = subMonths(today, 2);
 
   // Salary defines the period boundaries: monthly income rules only.
   const salaryEvents: DatedAmount[] = rules
@@ -357,9 +362,11 @@ async function loadForwardView(
   // a credit card are diverted to that card and billed on its due date instead.
   const costEvents: DatedAmount[] = [];
   for (const r of rules.filter((r) => r.type === "expense")) {
-    for (const date of expand(r)) {
+    const isCard = cardIds.has(r.accountId);
+    const dates = isCard ? expandFrom(r, cardChargeWindowStart) : expand(r);
+    for (const date of dates) {
       const e = { date, amountMinor: r.amountMinor };
-      if (cardIds.has(r.accountId)) pushCharge(r.accountId, e);
+      if (isCard) pushCharge(r.accountId, e);
       else costEvents.push(e);
     }
   }

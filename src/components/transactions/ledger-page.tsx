@@ -6,7 +6,7 @@ import { RecurringSection, type RecurringRow } from "@/components/transactions/r
 import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
 import { upcomingStatements } from "@/lib/card-cycle";
 import { expandRecurrence } from "@/lib/projection";
-import { addMonths } from "date-fns";
+import { addMonths, subMonths } from "date-fns";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
@@ -81,6 +81,10 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
   // charge shows up in the Total Amount Due of every cycle it lands in.
   const today = new Date();
   const horizon = addMonths(today, 12);
+  // Reach back far enough that a recurring occurrence dated before today but
+  // still billing on the current (issued, unpaid) statement is generated —
+  // cardCycleBills drops anything that would land on an already-past due date.
+  const chargeWindowStart = subMonths(today, 2);
   const cards = accounts
     .filter((a) => a.type === "credit_card")
     .map((a) => {
@@ -102,7 +106,7 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
                     endDate: r.endDate,
                     occurrenceCount: r.occurrenceCount,
                   },
-                  today,
+                  chargeWindowStart,
                   horizon,
                 ).map((date) => ({ date, amountMinor: r.amountMinor })),
               )

@@ -83,9 +83,12 @@ export function dueDateForCharge(charge: Date, dueDay: number): Date {
 /**
  * Repayment events for a card across [from, to].
  *
- * Each future charge is billed on the payment due date of the statement that
- * closes on or after it (statement date + the ~25-day gap to the due date). The
- * amount owed today is billed on the first upcoming due date. Empty bills drop.
+ * Each charge is billed on the payment due date of the statement that closes on
+ * or after it (statement date + the ~25-day gap to the due date) — the charge's
+ * OWN date decides this, so a back-dated charge can still belong to the current
+ * statement. The amount owed today is billed on the first upcoming due date, and
+ * anything that would fall on a due date already past (its statement has been
+ * issued) is dropped. Empty bills drop.
  */
 export function cardCycleBills(card: CardBillInput, from: Date, to: Date): DatedAmount[] {
   const start = startOfDay(from);
@@ -107,9 +110,8 @@ export function cardCycleBills(card: CardBillInput, from: Date, to: Date): Dated
   for (const c of card.charges) {
     const amount = Math.max(0, c.amountMinor);
     if (amount <= 0) continue;
-    const chargeDate = startOfDay(c.date);
-    if (isAfter(start, chargeDate)) continue; // already reflected in owedNow
-    const due = dueDateForCharge(chargeDate, card.dueDay);
+    const due = dueDateForCharge(startOfDay(c.date), card.dueDay);
+    if (isAfter(firstDue, due)) continue; // its statement is already issued/paid
     if (isAfter(due, end)) continue; // billed beyond the window
     add(due.getTime(), amount);
   }

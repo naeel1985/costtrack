@@ -113,6 +113,27 @@ describe("cardCycleBills", () => {
     expect(cardCycleBills({ dueDay: 3, owedNowMinor: 0, charges: [] }, from, to)).toHaveLength(0);
     expect(cardCycleBills({ dueDay: 0, owedNowMinor: aed(100), charges: [] }, from, to)).toHaveLength(0);
   });
+
+  it("bills a back-dated charge on its statement's due date, even before `from`", () => {
+    // User example: due day 2, a charge dated 27 Jun bills on 2 Aug. Adding it
+    // "today" (20 Jul) must not drop it just because 27 Jun precedes `from`.
+    const bills = cardCycleBills(
+      { dueDay: 2, owedNowMinor: 0, charges: [{ date: d("2026-06-27"), amountMinor: aed(500) }] },
+      d("2026-07-20"),
+      d("2027-07-20"),
+    );
+    expect(bills.map((b) => [ymd(b.date), b.amountMinor])).toEqual([["2026-08-02", aed(500)]]);
+  });
+
+  it("drops a charge whose statement was already issued (bills before the current due date)", () => {
+    // Due day 2, charge dated 1 Jun bills on 2 Jul — already past on 20 Jul.
+    const bills = cardCycleBills(
+      { dueDay: 2, owedNowMinor: 0, charges: [{ date: d("2026-06-01"), amountMinor: aed(500) }] },
+      d("2026-07-20"),
+      d("2027-07-20"),
+    );
+    expect(bills).toHaveLength(0);
+  });
 });
 
 describe("nextStatement", () => {
@@ -162,9 +183,7 @@ describe("upcomingStatements", () => {
     ]);
   });
 
-  it("merges a recurring charge onto the current cycle when it lands in that window", () => {
-    // A charge dated in the current statement window bills onto the same due date
-    // and adds to the current Total Amount Due rather than making a new line.
+  it("puts a later recurring charge on its own future cycle, not the current one", () => {
     const statements = upcomingStatements(
       3,
       aed(1_000),
@@ -177,6 +196,26 @@ describe("upcomingStatements", () => {
     expect(ymd(statements[0].paymentDueDate)).toBe("2026-08-03");
     expect(statements[1]).toMatchObject({ totalAmountDueMinor: aed(250) });
     expect(ymd(statements[1].paymentDueDate)).toBe("2026-09-03");
+  });
+
+  it("folds a back-dated recurring charge into the current Total Amount Due", () => {
+    // User example: due day 2, a recurring charge first dated 27 Jun (before
+    // today) belongs to the current statement paid 2 Aug — it must show there.
+    const statements = upcomingStatements(
+      2,
+      0,
+      [],
+      [
+        { date: d("2026-06-27"), amountMinor: aed(500) }, // -> 2 Aug (current)
+        { date: d("2026-07-27"), amountMinor: aed(500) }, // -> 2 Sep (next)
+      ],
+      d("2026-07-20"),
+      d("2027-07-20"),
+    );
+    expect(statements.map((s) => [ymd(s.paymentDueDate), s.totalAmountDueMinor])).toEqual([
+      ["2026-08-02", aed(500)],
+      ["2026-09-02", aed(500)],
+    ]);
   });
 
   it("returns nothing without a usable due day", () => {
