@@ -1,23 +1,31 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Credit-card statement cycles — pure, date-fns only, unit-tested.
 //
-// A credit card is a loan: you spend on it now and repay the bank on a fixed day
-// each month. Costs charged BETWEEN two consecutive due dates form one statement
-// cycle, payable on the closing due date — e.g. with a due day of the 2nd, every
-// cost from 2 Jul to 2 Aug is paid on 2 Aug. That repayment is when cash actually
-// leaves your accounts, so it's what the free-savings projection should feel.
+// A credit card is a loan repaid on a fixed day each month. Two dates govern a
+// statement:
 //
-// `cardCycleBills` turns a card into dated repayment events:
-//   • each FUTURE charge is billed on the due date closing its cycle, so a
-//     recurring cost that repeats for N months produces N charges, each landing
-//     on its own statement;
-//   • whatever is ALREADY owed today is due on the next upcoming due date.
+//   • Payment due date — the day of the month (`dueDay`) the bill must be paid.
+//   • Statement date   — when that bill is ISSUED. It sits 5 days after the
+//                        PREVIOUS month's payment due date. So for a due date of
+//                        3 Jul, the statement was issued on 8 Jun (3 Jun + 5).
+//
+// A statement bills every card charge registered between the previous statement
+// date and this one — the window (prevStatement, thisStatement] — and that total
+// is paid on the payment due date. Example (due day 3): the statement issued
+// 8 Jul covers charges from 9 Jun to 8 Jul and is paid on 3 Aug.
+//
+// So a charge waits for the next statement to close, then ~25 more days for the
+// payment date — that lag is when the money finally leaves free savings, which
+// is what `cardCycleBills` projects.
 //
 // All amounts are integer minor units, POSITIVE magnitudes.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { addMonths, getDaysInMonth, isAfter, setDate, startOfDay } from "date-fns";
+import { addDays, addMonths, getDaysInMonth, isAfter, setDate, startOfDay, subMonths } from "date-fns";
 import type { DatedAmount } from "./salary-period";
+
+/** A statement is issued this many days after the previous month's due date. */
+export const STATEMENT_LEAD_DAYS = 5;
 
 export interface CardBillInput {
   /** Day of the month the bill falls due (1–31). */
@@ -37,19 +45,47 @@ export function dueDateIn(ref: Date, dueDay: number): Date {
   return startOfDay(setDate(ref, day));
 }
 
-/** The first due date on or after `from`. */
+/** The first payment due date on or after `from`. */
 export function nextDueDate(from: Date, dueDay: number): Date {
   const start = startOfDay(from);
   const thisMonth = dueDateIn(start, dueDay);
   return isAfter(start, thisMonth) ? dueDateIn(addMonths(start, 1), dueDay) : thisMonth;
 }
 
+/** The statement date whose bill is paid on `dueDate`: prev month's due + 5 days. */
+export function statementDateForDue(dueDate: Date, dueDay: number): Date {
+  return addDays(dueDateIn(subMonths(startOfDay(dueDate), 1), dueDay), STATEMENT_LEAD_DAYS);
+}
+
+/** The payment due date for a statement issued on `statementDate`. */
+export function dueDateForStatement(statementDate: Date, dueDay: number): Date {
+  return nextDueDate(addDays(startOfDay(statementDate), 1), dueDay);
+}
+
+/** The first statement date on or after `charge` — the statement that bills it. */
+function statementOnOrAfter(charge: Date, dueDay: number): Date {
+  const c = startOfDay(charge);
+  let month = subMonths(c, 1);
+  for (let i = 0; i < 4; i++) {
+    const s = addDays(dueDateIn(month, dueDay), STATEMENT_LEAD_DAYS);
+    if (!isAfter(c, s)) return s; // s >= c
+    month = addMonths(month, 1);
+  }
+  // Unreachable for sane inputs (statements recur monthly).
+  return addDays(dueDateIn(c, dueDay), STATEMENT_LEAD_DAYS);
+}
+
+/** The payment due date on which a charge dated `charge` is billed. */
+export function dueDateForCharge(charge: Date, dueDay: number): Date {
+  return dueDateForStatement(statementOnOrAfter(charge, dueDay), dueDay);
+}
+
 /**
  * Repayment events for a card across [from, to].
  *
- * Each future charge is billed on the due date that closes its cycle (the first
- * due date on or after the charge). The amount owed today is billed on the first
- * upcoming due date. Bills with no money on them are dropped.
+ * Each future charge is billed on the payment due date of the statement that
+ * closes on or after it (statement date + the ~25-day gap to the due date). The
+ * amount owed today is billed on the first upcoming due date. Empty bills drop.
  */
 export function cardCycleBills(card: CardBillInput, from: Date, to: Date): DatedAmount[] {
   const start = startOfDay(from);
@@ -59,7 +95,6 @@ export function cardCycleBills(card: CardBillInput, from: Date, to: Date): Dated
   const firstDue = nextDueDate(start, card.dueDay);
   if (isAfter(firstDue, end)) return [];
 
-  // Accumulate by due-date epoch, so charges sharing a statement merge.
   const byDue = new Map<number, number>();
   const add = (dueMs: number, amount: number) => {
     if (amount <= 0) return;
@@ -69,13 +104,12 @@ export function cardCycleBills(card: CardBillInput, from: Date, to: Date): Dated
   // Current balance is due at the first upcoming statement.
   add(firstDue.getTime(), Math.max(0, card.owedNowMinor));
 
-  // Each future charge lands on the due date closing its cycle.
   for (const c of card.charges) {
     const amount = Math.max(0, c.amountMinor);
     if (amount <= 0) continue;
     const chargeDate = startOfDay(c.date);
     if (isAfter(start, chargeDate)) continue; // already reflected in owedNow
-    const due = nextDueDate(chargeDate, card.dueDay);
+    const due = dueDateForCharge(chargeDate, card.dueDay);
     if (isAfter(due, end)) continue; // billed beyond the window
     add(due.getTime(), amount);
   }
@@ -84,4 +118,43 @@ export function cardCycleBills(card: CardBillInput, from: Date, to: Date): Dated
     .filter(([, amount]) => amount > 0)
     .sort((a, b) => a[0] - b[0])
     .map(([dueMs, amountMinor]) => ({ date: new Date(dueMs), amountMinor }));
+}
+
+export interface StatementSummary {
+  statementDate: Date;
+  paymentDueDate: Date;
+  /** Charges registered in this statement's window (prevStatement, thisStatement]. */
+  totalAmountDueMinor: number;
+}
+
+/**
+ * The next upcoming statement for display: its statement date, payment due date,
+ * and Total Amount Due (the charges registered in its window). `charges` should
+ * be the card's registered (posted) charges; `owedNowMinor` is folded onto the
+ * first payment so the figure never understates what's payable.
+ */
+export function nextStatement(
+  dueDay: number,
+  owedNowMinor: number,
+  charges: DatedAmount[],
+  today: Date,
+): StatementSummary | null {
+  if (!Number.isFinite(dueDay) || dueDay < 1) return null;
+  const now = startOfDay(today);
+  const paymentDueDate = nextDueDate(now, dueDay);
+  const thisStatement = statementDateForDue(paymentDueDate, dueDay);
+  const prevStatement = statementDateForDue(dueDateIn(subMonths(paymentDueDate, 1), dueDay), dueDay);
+
+  const windowTotal = charges.reduce((sum, c) => {
+    const d = startOfDay(c.date).getTime();
+    return d > prevStatement.getTime() && d <= thisStatement.getTime()
+      ? sum + Math.max(0, c.amountMinor)
+      : sum;
+  }, 0);
+
+  return {
+    statementDate: thisStatement,
+    paymentDueDate,
+    totalAmountDueMinor: Math.max(windowTotal, Math.max(0, owedNowMinor)),
+  };
 }

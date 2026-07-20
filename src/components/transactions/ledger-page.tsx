@@ -4,6 +4,7 @@ import { AddTransactionButton } from "@/components/add-transaction-button";
 import { TransactionsView, type TxRow } from "@/components/transactions/transactions-view";
 import { RecurringSection, type RecurringRow } from "@/components/transactions/recurring-section";
 import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
+import { nextStatement } from "@/lib/card-cycle";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
@@ -72,16 +73,28 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
   const assetAccounts = accountsLite.filter((a) => a.type !== "credit_card" && !a.isSystem);
   const baseCurrency = assetAccounts[0]?.currency ?? "AED";
 
-  // A card's balance is negative; what's owed is its magnitude.
+  // A card's balance is negative; what's owed is its magnitude. Each card also
+  // gets its next statement (statement date, payment due date, total due).
+  const today = new Date();
   const cards = accounts
     .filter((a) => a.type === "credit_card")
-    .map((a) => ({
-      id: a.id,
-      name: a.name,
-      owedMinor: Math.max(0, -a.balanceMinor),
-      limitMinor: a.creditLimitMinor ?? null,
-      dueDay: a.dueDay ?? null,
-    }));
+    .map((a) => {
+      const owedMinor = Math.max(0, -a.balanceMinor);
+      const charges = rows
+        .filter((r) => r.accountId === a.id)
+        .map((r) => ({ date: r.date, amountMinor: r.amountMinor }));
+      const stmt = a.dueDay != null ? nextStatement(a.dueDay, owedMinor, charges, today) : null;
+      return {
+        id: a.id,
+        name: a.name,
+        owedMinor,
+        limitMinor: a.creditLimitMinor ?? null,
+        dueDay: a.dueDay ?? null,
+        statementDate: stmt?.statementDate ?? null,
+        paymentDueDate: stmt?.paymentDueDate ?? null,
+        totalAmountDueMinor: stmt?.totalAmountDueMinor ?? null,
+      };
+    });
 
   const creditRows = rows.filter((r) => r.method === "credit_card");
   const debitRows = rows.filter((r) => r.method === "debit_card");

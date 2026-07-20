@@ -61,6 +61,9 @@ export interface CreditCardLite {
   owedMinor: number;
   limitMinor?: number | null;
   dueDay?: number | null;
+  statementDate?: Date | null;
+  paymentDueDate?: Date | null;
+  totalAmountDueMinor?: number | null;
 }
 
 export function CreditCardSection({
@@ -116,33 +119,52 @@ export function CreditCardSection({
           </div>
         </div>
 
-        {/* Per-card breakdown: owed, plus available credit and due day. */}
-        <ul className="mb-3 space-y-1.5">
+        {/* Per-card breakdown: owed + available credit, then the next statement. */}
+        <ul className="mb-3 space-y-2.5">
           {cards.map((c) => {
             const available = c.limitMinor != null ? Math.max(0, c.limitMinor - c.owedMinor) : null;
             const overLimit = c.limitMinor != null && c.owedMinor > c.limitMinor;
             return (
-              <li key={c.id} className="flex items-center justify-between gap-3 text-sm">
-                <span className="min-w-0 truncate">
-                  {c.name}
-                  {c.dueDay != null && (
-                    <span className="text-muted-foreground"> · due day {c.dueDay}</span>
-                  )}
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  {c.limitMinor != null && (
-                    <span className={cn("text-xs", overLimit ? "text-negative" : "text-muted-foreground")}>
-                      {overLimit ? (
-                        "over limit"
-                      ) : (
-                        <>
-                          <Money minor={available ?? 0} currency={currency} showCurrency={false} /> left
-                        </>
-                      )}
+              <li key={c.id} className="rounded-lg border bg-card/60 px-3 py-2">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate font-medium">{c.name}</span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    {c.limitMinor != null && (
+                      <span className={cn("text-xs", overLimit ? "text-negative" : "text-muted-foreground")}>
+                        {overLimit ? (
+                          "over limit"
+                        ) : (
+                          <>
+                            <Money minor={available ?? 0} currency={currency} showCurrency={false} /> left
+                          </>
+                        )}
+                      </span>
+                    )}
+                    <Money minor={c.owedMinor} currency={currency} className="font-semibold" />
+                  </span>
+                </div>
+                {c.paymentDueDate && c.statementDate ? (
+                  <div className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>
+                      Statement {format(new Date(c.statementDate), "d MMM")} · pay{" "}
+                      {format(new Date(c.paymentDueDate), "d MMM")}
                     </span>
-                  )}
-                  <Money minor={c.owedMinor} currency={currency} className="font-medium" />
-                </span>
+                    <span>
+                      due{" "}
+                      <Money
+                        minor={c.totalAmountDueMinor ?? 0}
+                        currency={currency}
+                        className="font-medium text-foreground"
+                      />
+                    </span>
+                  </div>
+                ) : (
+                  c.dueDay == null && (
+                    <div className="mt-1 text-xs text-warning">
+                      Set a payment due day (edit the card) to schedule its bill.
+                    </div>
+                  )
+                )}
               </li>
             );
           })}
