@@ -28,6 +28,7 @@ import { Money } from "@/components/money";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { ProvisionForm, type ProvisionInitial } from "@/components/forms/provision-form";
 import { addAllocation, deleteProvision } from "@/server/actions";
+import { useConfirm } from "@/components/confirm";
 import { formatMoney } from "@/lib/money";
 import { PRIORITIES } from "@/lib/domain";
 import type { AccountLite } from "@/lib/view-types";
@@ -62,6 +63,7 @@ export function ProvisionsView({
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<ProvisionInitial | null>(null);
   const [allocFor, setAllocFor] = React.useState<ProvisionCard | null>(null);
+  const confirm = useConfirm();
 
   const totalTarget = provisions.reduce((s, p) => s + p.targetMinor, 0);
   const totalFunded = provisions.reduce((s, p) => s + p.fundedMinor, 0);
@@ -167,10 +169,16 @@ export function ProvisionsView({
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="text-negative focus:text-negative"
-                          onClick={() => {
-                            if (confirm("Delete this provision and its allocations?"))
+                          onSelect={async () => {
+                            const ok = await confirm({
+                              title: "Delete this provision?",
+                              description: "The provision and all its allocations are removed.",
+                              confirmLabel: "Delete",
+                              tone: "destructive",
+                            });
+                            if (ok)
                               deleteProvision(p.id).then((r) =>
-                                r.ok ? toast.success("Deleted") : toast.error(r.error),
+                                r.ok ? toast.success("Provision deleted") : toast.error(r.error),
                               );
                           }}
                         >

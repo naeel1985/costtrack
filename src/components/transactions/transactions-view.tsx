@@ -25,6 +25,7 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/shared";
 import { TransactionForm } from "@/components/forms/transaction-form";
+import { useConfirm } from "@/components/confirm";
 import { deleteTransaction } from "@/server/actions";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,7 @@ export function TransactionsView({
   const [showFilters, setShowFilters] = React.useState(false);
   const [editing, setEditing] = React.useState<TxRow | null>(null);
   const [, startTransition] = React.useTransition();
+  const confirm = useConfirm();
 
   const allTags = React.useMemo(() => {
     const s = new Set<string>();
@@ -94,11 +96,17 @@ export function TransactionsView({
     setTo("");
   }
 
-  function onDelete(id: string) {
-    if (!confirm("Delete this transaction?")) return;
+  async function onDelete(id: string) {
+    const ok = await confirm({
+      title: "Delete this transaction?",
+      description: "This removes it from your ledger and balances. You can't undo this.",
+      confirmLabel: "Delete",
+      tone: "destructive",
+    });
+    if (!ok) return;
     startTransition(async () => {
       const res = await deleteTransaction(id);
-      if (res.ok) toast.success("Deleted");
+      if (res.ok) toast.success("Transaction deleted");
       else toast.error(res.error);
     });
   }

@@ -53,6 +53,7 @@ import { PageHeader, StatCard, EmptyState } from "@/components/shared";
 import { PdcForm, type PdcInitial } from "@/components/forms/pdc-form";
 import { PdcBatchForm } from "@/components/forms/pdc-batch-form";
 import { deletePdc, setPdcStatus } from "@/server/actions";
+import { useConfirm } from "@/components/confirm";
 import { PDC_STATUSES } from "@/lib/domain";
 import { formatMoney } from "@/lib/money";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
@@ -91,6 +92,7 @@ export function PdcRegister({
   const [batchOpen, setBatchOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<PdcInitial | null>(null);
   const [, startTransition] = React.useTransition();
+  const confirm = useConfirm();
 
   const banks = React.useMemo(
     () => [...new Set(pdcs.map((p) => p.bankName).filter(Boolean))] as string[],
@@ -123,8 +125,14 @@ export function PdcRegister({
       else toast.error(res.error);
     });
   }
-  function remove(id: string) {
-    if (!confirm("Delete this cheque? Any reconciled ledger entry is removed too.")) return;
+  async function remove(id: string) {
+    const ok = await confirm({
+      title: "Delete this cheque?",
+      description: "Any reconciled ledger entry is removed too. This can't be undone.",
+      confirmLabel: "Delete",
+      tone: "destructive",
+    });
+    if (!ok) return;
     startTransition(async () => {
       const res = await deletePdc(id);
       if (res.ok) toast.success("Cheque deleted");

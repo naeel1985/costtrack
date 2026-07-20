@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Money } from "@/components/money";
 import { PageHeader, StatCard } from "@/components/shared";
 import { AccountForm, type AccountInitial } from "@/components/forms/account-form";
+import { useConfirm } from "@/components/confirm";
 import { AddTransactionButton } from "@/components/add-transaction-button";
 import { archiveAccount, deleteAccount } from "@/server/actions";
 import { ACCOUNT_TYPE_LABELS, type AccountType } from "@/lib/domain";
@@ -48,6 +49,7 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<AccountInitial | null>(null);
   const [, startTransition] = React.useTransition();
+  const confirm = useConfirm();
 
   const active = accounts.filter((a) => !a.isArchived);
   const netWorth = active.reduce((s, a) => s + a.balanceMinor, 0);
@@ -138,9 +140,15 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="text-negative focus:text-negative"
-                      onClick={() => {
-                        if (confirm("Delete this account and all its transactions?"))
-                          act(() => deleteAccount(a.id), "Account deleted");
+                      onSelect={async () => {
+                        const ok = await confirm({
+                          title: `Delete ${a.name}?`,
+                          description:
+                            "This permanently removes the account and every transaction on it. This can't be undone.",
+                          confirmLabel: "Delete account",
+                          tone: "destructive",
+                        });
+                        if (ok) act(() => deleteAccount(a.id), "Account deleted");
                       }}
                     >
                       <Trash2 /> Delete

@@ -6,15 +6,26 @@ import { Download, Upload, FileJson, FileSpreadsheet, Loader2 } from "lucide-rea
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/confirm";
 
 export function ImportExport() {
   const router = useRouter();
+  const confirm = useConfirm();
   const [busy, setBusy] = React.useState(false);
   const jsonInput = React.useRef<HTMLInputElement>(null);
   const csvInput = React.useRef<HTMLInputElement>(null);
 
   async function upload(file: File, mode: "json" | "csv") {
-    if (mode === "json" && !confirm("Importing a backup replaces ALL current data. Continue?")) return;
+    if (
+      mode === "json" &&
+      !(await confirm({
+        title: "Restore this backup?",
+        description: "Importing a backup replaces ALL current data. This can't be undone.",
+        confirmLabel: "Replace everything",
+        tone: "destructive",
+      }))
+    )
+      return;
     setBusy(true);
     try {
       const fd = new FormData();

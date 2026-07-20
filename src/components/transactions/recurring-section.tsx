@@ -18,6 +18,7 @@ import {
 import { Money } from "@/components/money";
 import { SectionTitle, EmptyState } from "@/components/shared";
 import { RecurringForm, type RecurringInitial } from "@/components/forms/recurring-form";
+import { useConfirm } from "@/components/confirm";
 import { deleteRecurring, postRecurringOccurrence, toggleRecurring } from "@/server/actions";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
@@ -53,6 +54,7 @@ export function RecurringSection({
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<RecurringInitial | null>(null);
   const [, startTransition] = React.useTransition();
+  const confirm = useConfirm();
 
   function openNew() {
     setEditing(null);
@@ -151,9 +153,14 @@ export function RecurringSection({
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         className="text-negative focus:text-negative"
-                        onClick={() => {
-                          if (confirm("Delete this recurring rule?"))
-                            act(() => deleteRecurring(r.id), "Deleted");
+                        onSelect={async () => {
+                          const ok = await confirm({
+                            title: "Delete this recurring rule?",
+                            description: "Future occurrences stop. Entries already posted stay.",
+                            confirmLabel: "Delete",
+                            tone: "destructive",
+                          });
+                          if (ok) act(() => deleteRecurring(r.id), "Recurring rule deleted");
                         }}
                       >
                         <Trash2 /> Delete
