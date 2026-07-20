@@ -7,6 +7,7 @@ import {
   nextDueDate,
   nextStatement,
   statementDateForDue,
+  upcomingStatements,
 } from "./card-cycle";
 
 const d = (iso: string) => new Date(`${iso}T00:00:00`);
@@ -140,5 +141,45 @@ describe("nextStatement", () => {
 
   it("returns null without a due day", () => {
     expect(nextStatement(0, aed(100), [], d("2026-06-20"))).toBeNull();
+  });
+});
+
+describe("upcomingStatements", () => {
+  const today = d("2026-07-20");
+  const horizon = d("2027-07-20");
+
+  it("keeps the current statement, then bills recurring charges into later cycles", () => {
+    const posted = [{ date: d("2026-06-20"), amountMinor: aed(700) }]; // in the 8 Jul window
+    const recurring = [
+      { date: d("2026-08-20"), amountMinor: aed(300) },
+      { date: d("2026-09-20"), amountMinor: aed(300) },
+    ];
+    const statements = upcomingStatements(3, 0, posted, recurring, today, horizon);
+    expect(statements.map((s) => [ymd(s.paymentDueDate), s.totalAmountDueMinor])).toEqual([
+      ["2026-08-03", aed(700)], // current issued statement (posted charge)
+      ["2026-10-03", aed(300)], // 20 Aug charge -> 8 Sep statement -> 3 Oct
+      ["2026-11-03", aed(300)], // 20 Sep charge -> 8 Oct statement -> 3 Nov
+    ]);
+  });
+
+  it("merges a recurring charge onto the current cycle when it lands in that window", () => {
+    // A charge dated in the current statement window bills onto the same due date
+    // and adds to the current Total Amount Due rather than making a new line.
+    const statements = upcomingStatements(
+      3,
+      aed(1_000),
+      [],
+      [{ date: d("2026-07-25"), amountMinor: aed(250) }], // -> 8 Aug stmt -> 3 Sep
+      today,
+      horizon,
+    );
+    expect(statements[0]).toMatchObject({ totalAmountDueMinor: aed(1_000) }); // owed now, due 3 Aug
+    expect(ymd(statements[0].paymentDueDate)).toBe("2026-08-03");
+    expect(statements[1]).toMatchObject({ totalAmountDueMinor: aed(250) });
+    expect(ymd(statements[1].paymentDueDate)).toBe("2026-09-03");
+  });
+
+  it("returns nothing without a usable due day", () => {
+    expect(upcomingStatements(0, aed(100), [], [], today, horizon)).toEqual([]);
   });
 });

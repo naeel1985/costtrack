@@ -4,7 +4,9 @@ import { AddTransactionButton } from "@/components/add-transaction-button";
 import { TransactionsView, type TxRow } from "@/components/transactions/transactions-view";
 import { RecurringSection, type RecurringRow } from "@/components/transactions/recurring-section";
 import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
-import { nextStatement } from "@/lib/card-cycle";
+import { upcomingStatements } from "@/lib/card-cycle";
+import { expandRecurrence } from "@/lib/projection";
+import { addMonths } from "date-fns";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
@@ -73,26 +75,49 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
   const assetAccounts = accountsLite.filter((a) => a.type !== "credit_card" && !a.isSystem);
   const baseCurrency = assetAccounts[0]?.currency ?? "AED";
 
-  // A card's balance is negative; what's owed is its magnitude. Each card also
-  // gets its next statement (statement date, payment due date, total due).
+  // A card's balance is negative; what's owed is its magnitude. Each card gets
+  // its upcoming statements: the current issued bill (from posted charges) plus
+  // future bills built from recurring costs targeting the card, so a recurring
+  // charge shows up in the Total Amount Due of every cycle it lands in.
   const today = new Date();
+  const horizon = addMonths(today, 12);
   const cards = accounts
     .filter((a) => a.type === "credit_card")
     .map((a) => {
       const owedMinor = Math.max(0, -a.balanceMinor);
-      const charges = rows
+      const postedCharges = rows
         .filter((r) => r.accountId === a.id)
         .map((r) => ({ date: r.date, amountMinor: r.amountMinor }));
-      const stmt = a.dueDay != null ? nextStatement(a.dueDay, owedMinor, charges, today) : null;
+      // Recurring expense rules that draw on this card, expanded to occurrences.
+      const futureCharges =
+        a.dueDay != null
+          ? rules
+              .filter((r) => r.type === "expense" && r.accountId === a.id && r.isActive)
+              .flatMap((r) =>
+                expandRecurrence(
+                  {
+                    frequency: r.frequency as never,
+                    interval: r.interval,
+                    startDate: r.startDate,
+                    endDate: r.endDate,
+                    occurrenceCount: r.occurrenceCount,
+                  },
+                  today,
+                  horizon,
+                ).map((date) => ({ date, amountMinor: r.amountMinor })),
+              )
+          : [];
+      const statements =
+        a.dueDay != null
+          ? upcomingStatements(a.dueDay, owedMinor, postedCharges, futureCharges, today, horizon)
+          : [];
       return {
         id: a.id,
         name: a.name,
         owedMinor,
         limitMinor: a.creditLimitMinor ?? null,
         dueDay: a.dueDay ?? null,
-        statementDate: stmt?.statementDate ?? null,
-        paymentDueDate: stmt?.paymentDueDate ?? null,
-        totalAmountDueMinor: stmt?.totalAmountDueMinor ?? null,
+        statements,
       };
     });
 

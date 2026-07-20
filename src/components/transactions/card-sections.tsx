@@ -55,15 +55,20 @@ function CostList({ rows, empty }: { rows: TxRow[]; empty: string }) {
 
 // ── Credit card ───────────────────────────────────────────────────────────────
 
+export interface CardStatementLite {
+  statementDate: Date;
+  paymentDueDate: Date;
+  totalAmountDueMinor: number;
+}
+
 export interface CreditCardLite {
   id: string;
   name: string;
   owedMinor: number;
   limitMinor?: number | null;
   dueDay?: number | null;
-  statementDate?: Date | null;
-  paymentDueDate?: Date | null;
-  totalAmountDueMinor?: number | null;
+  /** Current issued statement first, then future cycles (recurring charges). */
+  statements: CardStatementLite[];
 }
 
 export function CreditCardSection({
@@ -83,9 +88,9 @@ export function CreditCardSection({
   const [payOpen, setPayOpen] = React.useState(false);
   const owedMinor = cards.reduce((s, c) => s + c.owedMinor, 0);
   // Total Amount Due this cycle: the sum of each card's current (issued but
-  // unpaid) statement bill.
-  const dueMinor = cards.reduce((s, c) => s + (c.totalAmountDueMinor ?? 0), 0);
-  const hasStatements = cards.some((c) => c.paymentDueDate != null);
+  // unpaid) statement bill — index 0 of its upcoming statements.
+  const dueMinor = cards.reduce((s, c) => s + (c.statements[0]?.totalAmountDueMinor ?? 0), 0);
+  const hasStatements = cards.some((c) => c.statements.length > 0);
   const monthTotal = rows
     .filter((r) => new Date(r.date).getMonth() === new Date().getMonth())
     .reduce((s, r) => s + r.amountMinor, 0);
@@ -134,6 +139,9 @@ export function CreditCardSection({
           {cards.map((c) => {
             const available = c.limitMinor != null ? Math.max(0, c.limitMinor - c.owedMinor) : null;
             const overLimit = c.limitMinor != null && c.owedMinor > c.limitMinor;
+            const current = c.statements[0];
+            // Upcoming cycles carrying a projected charge (recurring costs).
+            const upcoming = c.statements.slice(1).filter((s) => s.totalAmountDueMinor > 0);
             return (
               <li key={c.id} className="rounded-lg border bg-card/60 px-3 py-2">
                 <div className="flex items-center justify-between gap-3 text-sm">
@@ -153,21 +161,49 @@ export function CreditCardSection({
                     <Money minor={c.owedMinor} currency={currency} className="font-semibold" />
                   </span>
                 </div>
-                {c.paymentDueDate && c.statementDate ? (
-                  <div className="mt-1.5 flex items-end justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-1.5">
-                    <div className="text-xs text-muted-foreground">
-                      <div className="font-medium text-foreground">Total amount due</div>
-                      <div>
-                        Statement {format(new Date(c.statementDate), "d MMM")} · pay by{" "}
-                        {format(new Date(c.paymentDueDate), "d MMM")}
+                {current ? (
+                  <>
+                    <div className="mt-1.5 flex items-end justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-1.5">
+                      <div className="text-xs text-muted-foreground">
+                        <div className="font-medium text-foreground">Total amount due</div>
+                        <div>
+                          Statement {format(new Date(current.statementDate), "d MMM")} · pay by{" "}
+                          {format(new Date(current.paymentDueDate), "d MMM")}
+                        </div>
                       </div>
+                      <Money
+                        minor={current.totalAmountDueMinor}
+                        currency={currency}
+                        className="text-base font-semibold text-[#7c3aed]"
+                      />
                     </div>
-                    <Money
-                      minor={c.totalAmountDueMinor ?? 0}
-                      currency={currency}
-                      className="text-base font-semibold text-[#7c3aed]"
-                    />
-                  </div>
+                    {upcoming.length > 0 && (
+                      <ul className="mt-1 space-y-0.5">
+                        {upcoming.slice(0, 3).map((s) => (
+                          <li
+                            key={s.paymentDueDate.getTime()}
+                            className="flex items-center justify-between gap-3 px-2.5 text-xs text-muted-foreground"
+                          >
+                            <span>
+                              Next · statement {format(new Date(s.statementDate), "d MMM")} · pay by{" "}
+                              {format(new Date(s.paymentDueDate), "d MMM")}
+                            </span>
+                            <Money
+                              minor={s.totalAmountDueMinor}
+                              currency={currency}
+                              showCurrency={false}
+                              className="font-medium text-foreground"
+                            />
+                          </li>
+                        ))}
+                        {upcoming.length > 3 && (
+                          <li className="px-2.5 text-xs text-muted-foreground">
+                            +{upcoming.length - 3} more upcoming cycles
+                          </li>
+                        )}
+                      </ul>
+                    )}
+                  </>
                 ) : (
                   c.dueDay == null && (
                     <div className="mt-1 text-xs text-warning">

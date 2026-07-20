@@ -158,3 +158,49 @@ export function nextStatement(
     totalAmountDueMinor: Math.max(windowTotal, Math.max(0, owedNowMinor)),
   };
 }
+
+/**
+ * Every statement over [today, horizon]: the current issued statement (built
+ * from posted charges + what's owed) followed by future statements built from
+ * projected charges — recurring occurrences and scheduled spend. Amounts landing
+ * on the same payment due date are merged, so a monthly recurring cost surfaces
+ * as one "Total Amount Due" line per cycle.
+ *
+ * `owedNowMinor` is folded into the current statement, so `futureCharges` must
+ * NOT include anything already reflected in the balance (they're future-dated).
+ */
+export function upcomingStatements(
+  dueDay: number,
+  owedNowMinor: number,
+  postedCharges: DatedAmount[],
+  futureCharges: DatedAmount[],
+  today: Date,
+  horizon: Date,
+): StatementSummary[] {
+  const current = nextStatement(dueDay, owedNowMinor, postedCharges, today);
+  if (!current) return [];
+
+  const byDue = new Map<number, StatementSummary>();
+  const put = (s: StatementSummary) => {
+    const key = s.paymentDueDate.getTime();
+    const existing = byDue.get(key);
+    if (existing) existing.totalAmountDueMinor += s.totalAmountDueMinor;
+    else byDue.set(key, { ...s });
+  };
+
+  // Keep the current statement even if nothing is due this cycle, so it stays
+  // the first entry and callers can read "due now" from index 0.
+  put(current);
+
+  // Future charges billed on the due date of the statement that closes after
+  // them. owedNow is already in `current`, so pass 0 to avoid double counting.
+  for (const b of cardCycleBills({ dueDay, owedNowMinor: 0, charges: futureCharges }, today, horizon)) {
+    put({
+      statementDate: statementDateForDue(b.date, dueDay),
+      paymentDueDate: b.date,
+      totalAmountDueMinor: b.amountMinor,
+    });
+  }
+
+  return [...byDue.values()].sort((a, b) => a.paymentDueDate.getTime() - b.paymentDueDate.getTime());
+}
