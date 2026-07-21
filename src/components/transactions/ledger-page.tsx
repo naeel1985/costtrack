@@ -6,7 +6,7 @@ import { RecurringSection, type RecurringRow } from "@/components/transactions/r
 import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
 import { upcomingStatements } from "@/lib/card-cycle";
 import { expandRecurrence } from "@/lib/projection";
-import { addMonths, subMonths } from "date-fns";
+import { addMonths, endOfMonth, startOfMonth, subMonths } from "date-fns";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
@@ -125,8 +125,59 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
       };
     });
 
-  const creditRows = rows.filter((r) => r.method === "credit_card");
-  const debitRows = rows.filter((r) => r.method === "debit_card");
+  // Card-linked recurring costs surface in the usage lists as this month's
+  // projected occurrences — a debit rule on the 5th shows under Debit Card Usage,
+  // a credit rule shows under Credit cards — alongside the posted spend.
+  const acctById = new Map(accounts.map((a) => [a.id, a]));
+  const catById = new Map(categoriesLite.map((c) => [c.id, c]));
+  const creditCardIds = new Set(accounts.filter((a) => a.type === "credit_card").map((a) => a.id));
+  const assetIds = new Set(assetAccounts.map((a) => a.id));
+  const monthStart = startOfMonth(today);
+  const monthEnd = endOfMonth(today);
+
+  const recurringUsageRows = (inSection: (accountId: string) => boolean): TxRow[] =>
+    rules
+      .filter((r) => r.type === "expense" && r.isActive && inSection(r.accountId))
+      .flatMap((r) => {
+        const acct = acctById.get(r.accountId);
+        const cat = r.categoryId ? catById.get(r.categoryId) : null;
+        return expandRecurrence(
+          {
+            frequency: r.frequency as never,
+            interval: r.interval,
+            startDate: r.startDate,
+            endDate: r.endDate,
+            occurrenceCount: r.occurrenceCount,
+          },
+          monthStart,
+          monthEnd,
+        ).map((date) => ({
+          id: `rec:${r.id}:${date.getTime()}`,
+          type: "expense",
+          method: creditCardIds.has(r.accountId) ? "credit_card" : "debit_card",
+          amountMinor: r.amountMinor,
+          currency: r.currency,
+          date,
+          note: r.name,
+          tagList: [] as string[],
+          accountId: r.accountId,
+          account: { name: acct?.name ?? "", color: acct?.color ?? "#64748b" },
+          transferAccount: null,
+          categoryId: r.categoryId,
+          category: cat ? { name: cat.name, color: cat.color } : null,
+          isRecurring: true,
+        }));
+      });
+
+  const byDateDesc = (a: TxRow, b: TxRow) => b.date.getTime() - a.date.getTime();
+  const creditRows = [
+    ...rows.filter((r) => r.method === "credit_card"),
+    ...recurringUsageRows((id) => creditCardIds.has(id)),
+  ].sort(byDateDesc);
+  const debitRows = [
+    ...rows.filter((r) => r.method === "debit_card"),
+    ...recurringUsageRows((id) => assetIds.has(id)),
+  ].sort(byDateDesc);
 
   return (
     <div className="space-y-7">

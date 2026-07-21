@@ -22,6 +22,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Field } from "@/components/forms/field";
+import { Badge } from "@/components/ui/badge";
+import { Pager, usePagination } from "@/components/ui/pagination";
 import { Money } from "@/components/money";
 import { TransactionForm } from "@/components/forms/transaction-form";
 import { recordCreditCardPayment } from "@/server/actions";
@@ -30,26 +32,35 @@ import type { TxRow } from "./transactions-view";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 function CostList({ rows, empty }: { rows: TxRow[]; empty: string }) {
+  const { page, setPage, pageCount, pageItems } = usePagination(rows, 6);
   if (rows.length === 0) {
     return <p className="py-6 text-center text-sm text-muted-foreground">{empty}</p>;
   }
   return (
-    <ul className="divide-y">
-      {rows.slice(0, 8).map((r) => (
-        <li key={r.id} className="flex items-center justify-between gap-3 py-2.5">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">
-              {r.note || r.category?.name || "Cost"}
+    <>
+      <ul className="divide-y">
+        {pageItems.map((r) => (
+          <li key={r.id} className="flex items-center justify-between gap-3 py-2.5">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 truncate text-sm font-medium">
+                <span className="truncate">{r.note || r.category?.name || "Cost"}</span>
+                {r.isRecurring && (
+                  <Badge variant="neutral" className="shrink-0 px-1.5 py-0 text-[10px]">
+                    recurring
+                  </Badge>
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {format(r.date, "d MMM")}
+                {r.account?.name ? ` · ${r.account.name}` : ""}
+              </div>
             </div>
-            <div className="text-xs text-muted-foreground">
-              {format(r.date, "d MMM")}
-              {r.account?.name ? ` · ${r.account.name}` : ""}
-            </div>
-          </div>
-          <Money minor={r.amountMinor} currency={r.currency} className="text-sm font-semibold" />
-        </li>
-      ))}
-    </ul>
+            <Money minor={r.amountMinor} currency={r.currency} className="text-sm font-semibold" />
+          </li>
+        ))}
+      </ul>
+      <Pager page={page} pageCount={pageCount} onPage={setPage} />
+    </>
   );
 }
 

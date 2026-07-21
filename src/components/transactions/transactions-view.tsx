@@ -23,6 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Pager, usePagination } from "@/components/ui/pagination";
 import { EmptyState } from "@/components/shared";
 import { TransactionForm } from "@/components/forms/transaction-form";
 import { useConfirm } from "@/components/confirm";
@@ -44,6 +45,8 @@ export interface TxRow {
   transferAccount: { name: string } | null;
   categoryId: string | null;
   category: { name: string; color: string } | null;
+  /** A projected occurrence of a recurring rule (not a posted transaction). */
+  isRecurring?: boolean;
 }
 
 export function TransactionsView({
@@ -87,6 +90,12 @@ export function TransactionsView({
   const total = filtered.reduce((s, r) => s + r.amountMinor, 0);
   const hasActiveFilters =
     accountId !== "all" || categoryId !== "all" || tag !== "all" || !!from || !!to;
+
+  const { page, setPage, pageCount, pageItems, start, end } = usePagination(filtered, 20);
+  // Any filter or search change resets the view to the first page.
+  React.useEffect(() => {
+    setPage(0);
+  }, [search, accountId, categoryId, tag, from, to, setPage]);
 
   function clearFilters() {
     setAccountId("all");
@@ -219,7 +228,7 @@ export function TransactionsView({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((r) => (
+              {pageItems.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="whitespace-nowrap text-muted-foreground">
                     {format(r.date, "d MMM")}
@@ -291,6 +300,13 @@ export function TransactionsView({
           </Table>
         </div>
       )}
+
+      <Pager
+        page={page}
+        pageCount={pageCount}
+        onPage={setPage}
+        label={`${start + 1}–${end} of ${filtered.length}`}
+      />
 
       <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
         <DialogContent>

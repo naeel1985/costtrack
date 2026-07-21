@@ -18,6 +18,7 @@ import {
 import { Money } from "@/components/money";
 import { SectionTitle, EmptyState } from "@/components/shared";
 import { RecurringForm, type RecurringInitial } from "@/components/forms/recurring-form";
+import { Pager, usePagination } from "@/components/ui/pagination";
 import { useConfirm } from "@/components/confirm";
 import { deleteRecurring, postRecurringOccurrence, toggleRecurring } from "@/server/actions";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
@@ -55,6 +56,7 @@ export function RecurringSection({
   const [editing, setEditing] = React.useState<RecurringInitial | null>(null);
   const [, startTransition] = React.useTransition();
   const confirm = useConfirm();
+  const { page, setPage, pageCount, pageItems } = usePagination(rules, 6);
 
   function openNew() {
     setEditing(null);
@@ -109,7 +111,7 @@ export function RecurringSection({
         />
       ) : (
         <div className="grid gap-2 sm:grid-cols-2">
-          {rules.map((r) => (
+          {pageItems.map((r) => (
             <Card key={r.id} className={r.isActive ? "" : "opacity-60"}>
               <CardContent className="flex items-center gap-3 p-3">
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -171,6 +173,7 @@ export function RecurringSection({
               </CardContent>
             </Card>
           ))}
+          <Pager page={page} pageCount={pageCount} onPage={setPage} className="sm:col-span-2" />
         </div>
       )}
 
