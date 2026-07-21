@@ -44,7 +44,7 @@ import {
   type SalaryPeriodResult,
 } from "@/lib/salary-period";
 import { buildCashflowTimeline, type CashflowTimeline } from "@/lib/cashflow-timeline";
-import { cardCycleBills } from "@/lib/card-cycle";
+import { cardCycleBills, nextDueDate, statementDateForDue } from "@/lib/card-cycle";
 
 /** The dashboard always builds a full year so any date in it can be inspected. */
 export const TIMELINE_MONTHS = 12;
@@ -299,7 +299,13 @@ async function loadForwardView(
   // it, so we always build the full 12 months regardless of the chart window.
   const windowEnd = addMonths(today, TIMELINE_MONTHS);
 
-  const [rawRules, rawPdcs, rawProvisions, rawScheduled] = await Promise.all([
+  // Card accounts with a due day — their posted spend is fetched so future-dated
+  // charges can be billed on their own cycle instead of the current one.
+  const cardAccountIds = accounts
+    .filter((a) => a.type === "credit_card" && a.dueDay != null)
+    .map((a) => a.id);
+
+  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx] = await Promise.all([
     prisma.recurringRule.findMany({ where: { userId, isActive: true } }),
     prisma.pDC.findMany({ where: { userId, status: "pending", dueDate: { gte: today, lte: windowEnd } } }),
     prisma.provision.findMany({
@@ -311,9 +317,23 @@ async function loadForwardView(
     prisma.transaction.findMany({
       where: { userId, status: "scheduled", date: { gte: today, lte: windowEnd } },
     }),
+    cardAccountIds.length
+      ? prisma.transaction.findMany({
+          where: { userId, status: "posted", type: "expense", accountId: { in: cardAccountIds } },
+        })
+      : Promise.resolve([]),
   ]);
 
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
+
+  // Posted card spend, grouped by card, so we can split out future-dated charges.
+  const postedByCard = new Map<string, DatedAmount[]>();
+  for (const raw of rawPostedCardTx) {
+    const t = decryptTransaction(raw, dek);
+    const list = postedByCard.get(t.accountId);
+    if (list) list.push({ date: t.date, amountMinor: t.amountMinor });
+    else postedByCard.set(t.accountId, [{ date: t.date, amountMinor: t.amountMinor }]);
+  }
 
   // ── Credit cards are loans repaid on a due date ─────────────────────────────
   // A charge to a card doesn't leave cash when it's swiped; the statement is
@@ -399,11 +419,21 @@ async function loadForwardView(
   // dashboard can show the "Total Amount Due" spike landing on each due date).
   const cardBillEvents: DatedAmount[] = [];
   for (const card of cards) {
+    const dueDay = card.dueDay!;
+    const owedNow = Math.max(0, -card.balanceMinor);
+    // Posted spend dated after the current statement closes belongs to a later
+    // cycle. It sits in the balance, so pull it out of the current-cycle lump and
+    // bill it by its own date instead (same rule as the Costs page statements).
+    const thisStatement = statementDateForDue(nextDueDate(today, dueDay), dueDay).getTime();
+    const posted = postedByCard.get(card.id) ?? [];
+    const futurePosted = posted.filter((c) => startOfDay(c.date).getTime() > thisStatement);
+    const futurePostedSum = futurePosted.reduce((s, c) => s + Math.max(0, c.amountMinor), 0);
+
     const bills = cardCycleBills(
       {
-        dueDay: card.dueDay!,
-        owedNowMinor: Math.max(0, -card.balanceMinor),
-        charges: cardCharges.get(card.id) ?? [],
+        dueDay,
+        owedNowMinor: Math.max(0, owedNow - futurePostedSum),
+        charges: [...(cardCharges.get(card.id) ?? []), ...futurePosted],
       },
       today,
       windowEnd,

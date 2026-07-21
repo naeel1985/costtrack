@@ -162,14 +162,17 @@ export function nextStatement(
 }
 
 /**
- * Every statement over [today, horizon]: the current issued statement (built
- * from posted charges + what's owed) followed by future statements built from
- * projected charges — recurring occurrences and scheduled spend. Amounts landing
- * on the same payment due date are merged, so a monthly recurring cost surfaces
- * as one "Total Amount Due" line per cycle.
+ * Every statement over [today, horizon]: the current statement (what's owed for
+ * this cycle and any overdue carry) followed by future statements built from
+ * charges that fall AFTER the current statement closes — future-dated posted
+ * spend plus projected recurring/scheduled charges. Amounts landing on the same
+ * payment due date are merged, so a monthly recurring cost surfaces as one
+ * "Total Amount Due" line per cycle.
  *
- * `owedNowMinor` is folded into the current statement, so `futureCharges` must
- * NOT include anything already reflected in the balance (they're future-dated).
+ * `owedNowMinor` is the card's balance (payment-aware). A charge you dated into a
+ * later cycle sits in that balance but does NOT belong to the current bill, so we
+ * subtract those future-dated posted charges out of the current statement and
+ * bill them on their own due dates instead.
  */
 export function upcomingStatements(
   dueDay: number,
@@ -179,8 +182,19 @@ export function upcomingStatements(
   today: Date,
   horizon: Date,
 ): StatementSummary[] {
-  const current = nextStatement(dueDay, owedNowMinor, postedCharges, today);
-  if (!current) return [];
+  if (!Number.isFinite(dueDay) || dueDay < 1) return [];
+  const now = startOfDay(today);
+  const currentDue = nextDueDate(now, dueDay);
+  const thisStatement = statementDateForDue(currentDue, dueDay);
+
+  // Posted charges dated after the current statement's close belong to a later
+  // cycle — pull them out of the current bill and bill them by their own date.
+  const futurePosted = postedCharges.filter((c) => isAfter(startOfDay(c.date), thisStatement));
+  const futurePostedSum = futurePosted.reduce((s, c) => s + Math.max(0, c.amountMinor), 0);
+
+  // The current statement (plus any overdue carry) = the balance minus those
+  // not-yet-billed future charges. Balance is payment-aware, so this is too.
+  const currentBaseMinor = Math.max(0, Math.max(0, owedNowMinor) - futurePostedSum);
 
   const byDue = new Map<number, StatementSummary>();
   const put = (s: StatementSummary) => {
@@ -192,11 +206,17 @@ export function upcomingStatements(
 
   // Keep the current statement even if nothing is due this cycle, so it stays
   // the first entry and callers can read "due now" from index 0.
-  put(current);
+  put({ statementDate: thisStatement, paymentDueDate: currentDue, totalAmountDueMinor: currentBaseMinor });
 
-  // Future charges billed on the due date of the statement that closes after
-  // them. owedNow is already in `current`, so pass 0 to avoid double counting.
-  for (const b of cardCycleBills({ dueDay, owedNowMinor: 0, charges: futureCharges }, today, horizon)) {
+  // Future-dated posted spend + projected charges, each billed on the due date
+  // of the statement that closes after it. owedNow is already accounted for
+  // above, so pass 0 here to avoid double counting.
+  const bills = cardCycleBills(
+    { dueDay, owedNowMinor: 0, charges: [...futurePosted, ...futureCharges] },
+    now,
+    horizon,
+  );
+  for (const b of bills) {
     put({
       statementDate: statementDateForDue(b.date, dueDay),
       paymentDueDate: b.date,

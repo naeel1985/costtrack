@@ -170,17 +170,36 @@ describe("upcomingStatements", () => {
   const horizon = d("2027-07-20");
 
   it("keeps the current statement, then bills recurring charges into later cycles", () => {
-    const posted = [{ date: d("2026-06-20"), amountMinor: aed(700) }]; // in the 8 Jul window
+    // The 700 posted charge sits in the balance (owedNow); it's in the current
+    // window so it stays on the current bill.
+    const posted = [{ date: d("2026-06-20"), amountMinor: aed(700) }];
     const recurring = [
       { date: d("2026-08-20"), amountMinor: aed(300) },
       { date: d("2026-09-20"), amountMinor: aed(300) },
     ];
-    const statements = upcomingStatements(3, 0, posted, recurring, today, horizon);
+    const statements = upcomingStatements(3, aed(700), posted, recurring, today, horizon);
     expect(statements.map((s) => [ymd(s.paymentDueDate), s.totalAmountDueMinor])).toEqual([
       ["2026-08-03", aed(700)], // current issued statement (posted charge)
       ["2026-10-03", aed(300)], // 20 Aug charge -> 8 Sep statement -> 3 Oct
       ["2026-11-03", aed(300)], // 20 Sep charge -> 8 Oct statement -> 3 Nov
     ]);
+  });
+
+  it("keeps a future-dated posted charge out of the current bill", () => {
+    // A charge dated 15 Aug is in the balance but belongs to a later cycle — it
+    // must NOT inflate the current statement (paid 3 Aug).
+    const statements = upcomingStatements(
+      3,
+      aed(1_500), // the balance includes the future-dated charge
+      [{ date: d("2026-08-15"), amountMinor: aed(1_500) }],
+      [],
+      today,
+      horizon,
+    );
+    expect(statements[0]).toMatchObject({ totalAmountDueMinor: 0 }); // current bill, not 1,500
+    expect(ymd(statements[0].paymentDueDate)).toBe("2026-08-03");
+    const later = statements.find((s) => s.totalAmountDueMinor === aed(1_500))!;
+    expect(ymd(later.paymentDueDate)).toBe("2026-10-03"); // 15 Aug -> 8 Sep stmt -> 3 Oct
   });
 
   it("puts a later recurring charge on its own future cycle, not the current one", () => {
