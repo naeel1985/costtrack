@@ -22,6 +22,7 @@ import { ObligationsList } from "@/components/dashboard/obligations-list";
 import { SalaryPeriodCard } from "@/components/dashboard/salary-period-card";
 import { IncomeVsCostsCard } from "@/components/dashboard/income-vs-costs-card";
 import { FreeSavingsExplorer } from "@/components/dashboard/free-savings-explorer";
+import { Assistant } from "@/components/dashboard/assistant";
 import { ACCOUNT_TYPE_LABELS, type AccountType } from "@/lib/domain";
 
 export default async function DashboardPage() {
@@ -110,6 +111,8 @@ export default async function DashboardPage() {
       </div>
 
       <FreeSavingsExplorer daily={timeline.daily} currency={baseCurrency} />
+
+      <Assistant />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
