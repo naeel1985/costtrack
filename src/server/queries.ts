@@ -31,6 +31,7 @@ import {
   eventsFromProvisions,
   eventsFromRecurring,
   expandRecurrence,
+  occurrenceKey,
   projectBalances,
   type ProjectionAccount,
   type ProjectionEvent,
@@ -74,6 +75,25 @@ export async function getAccountsWithBalances(includeArchived = false): Promise<
   return accounts.map((a) => ({ ...a, balanceMinor: balances[a.id] ?? a.openingBalanceMinor }));
 }
 
+/**
+ * The set of recurring occurrences already materialised as posted income
+ * transactions ("debited"). Keyed by rule + day so a projected occurrence can be
+ * reconciled against its real posting and never double-counted. Operates on
+ * already-decrypted transactions (recurringRuleId/date/type are plaintext, but
+ * we take decrypted rows since callers already have them).
+ */
+function debitedOccurrenceKeys(
+  transactions: { type: string; status: string; recurringRuleId: string | null; date: Date }[],
+): Set<string> {
+  const keys = new Set<string>();
+  for (const t of transactions) {
+    if (t.status === "posted" && t.type === "income" && t.recurringRuleId) {
+      keys.add(occurrenceKey(t.recurringRuleId, t.date));
+    }
+  }
+  return keys;
+}
+
 export interface WhatIfEvent {
   date: Date;
   accountId: string;
@@ -115,6 +135,10 @@ export async function getProjection({
 
   const currentBalances = computeBalances(accounts, posted, start);
 
+  // A recurring income occurrence that's already been "debited" (materialised as
+  // a posted income transaction) is in the balance above — don't also project it.
+  const debited = debitedOccurrenceKeys(posted);
+
   const projAccounts: ProjectionAccount[] = accounts.map((a) => ({
     id: a.id,
     name: a.name,
@@ -139,6 +163,7 @@ export async function getProjection({
       })),
       start,
       end,
+      debited,
     ),
     ...eventsFromPdcs(
       pdcs.map((p) => ({
@@ -210,7 +235,7 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
   const start = startOfDay(new Date());
   const end = addDays(start, horizonDays);
 
-  const [rawPdcs, rawRules, rawProvisions] = await Promise.all([
+  const [rawPdcs, rawRules, rawProvisions, rawDebited] = await Promise.all([
     prisma.pDC.findMany({
       where: { userId: user.id, status: "pending", dueDate: { gte: start, lte: end } },
       include: { account: true },
@@ -220,7 +245,14 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
       where: { userId: user.id, status: "active", dueDate: { gte: start, lte: end } },
       include: { allocations: true },
     }),
+    prisma.transaction.findMany({
+      where: { userId: user.id, status: "posted", type: "income", recurringRuleId: { not: null } },
+      select: { recurringRuleId: true, date: true },
+    }),
   ]);
+
+  const debited = new Set<string>();
+  for (const t of rawDebited) if (t.recurringRuleId) debited.add(occurrenceKey(t.recurringRuleId, t.date));
 
   const items: UpcomingObligation[] = [];
 
@@ -246,6 +278,7 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
       start,
       end,
     )) {
+      if (r.type === "income" && debited.has(occurrenceKey(r.id, date))) continue;
       items.push({
         id: `${r.id}:${date.getTime()}`,
         kind: "recurring",
@@ -305,7 +338,7 @@ async function loadForwardView(
     .filter((a) => a.type === "credit_card" && a.dueDay != null)
     .map((a) => a.id);
 
-  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx] = await Promise.all([
+  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx, rawDebited] = await Promise.all([
     prisma.recurringRule.findMany({ where: { userId, isActive: true } }),
     prisma.pDC.findMany({ where: { userId, status: "pending", dueDate: { gte: today, lte: windowEnd } } }),
     prisma.provision.findMany({
@@ -322,9 +355,19 @@ async function loadForwardView(
           where: { userId, status: "posted", type: "expense", accountId: { in: cardAccountIds } },
         })
       : Promise.resolve([]),
+    // Income occurrences already debited into an account (recurringRuleId/date are
+    // plaintext, so no decryption needed) — excluded from the projected income so
+    // a landed salary isn't counted both in savings and as a future event.
+    prisma.transaction.findMany({
+      where: { userId, status: "posted", type: "income", recurringRuleId: { not: null } },
+      select: { recurringRuleId: true, date: true },
+    }),
   ]);
 
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
+  const debited = new Set<string>();
+  for (const t of rawDebited) if (t.recurringRuleId) debited.add(occurrenceKey(t.recurringRuleId, t.date));
+  const notDebited = (ruleId: string) => (date: Date) => !debited.has(occurrenceKey(ruleId, date));
 
   // Posted card spend, grouped by card, so we can split out future-dated charges.
   const postedByCard = new Map<string, DatedAmount[]>();
@@ -371,13 +414,13 @@ async function loadForwardView(
   // to cover its own cycle's costs, so only its surplus becomes free savings.
   const salaryEvents: DatedAmount[] = rules
     .filter((r) => r.type === "income" && r.frequency === "monthly")
-    .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
+    .flatMap((r) => expand(r).filter(notDebited(r.id)).map((date) => ({ date, amountMinor: r.amountMinor })));
 
   // Every other income stream (any non-monthly cadence, scheduled income and
   // received cheques) is pure free savings the moment it lands.
   const otherIncomeEvents: DatedAmount[] = rules
     .filter((r) => r.type === "income" && r.frequency !== "monthly")
-    .flatMap((r) => expand(r).map((date) => ({ date, amountMinor: r.amountMinor })));
+    .flatMap((r) => expand(r).filter(notDebited(r.id)).map((date) => ({ date, amountMinor: r.amountMinor })));
 
   // Committed costs: recurring costs, scheduled spend, issued cheques due and
   // the unfunded remainder of provisions that carry a due date. Charges aimed at
@@ -582,6 +625,89 @@ export async function getRecurringRules() {
     orderBy: { nextRunDate: "asc" },
   });
   return rows.map((r) => decryptRecurring(r, dek));
+}
+
+// ── Recurring income schedule ──────────────────────────────────────────────────
+
+export interface IncomeOccurrence {
+  key: string;
+  ruleId: string;
+  ruleName: string;
+  accountId: string;
+  accountName: string;
+  color: string;
+  currency: string;
+  date: Date;
+  /** The rule's configured amount — the default when debiting. */
+  defaultAmountMinor: number;
+  /** True once this occurrence has been debited into its account. */
+  debited: boolean;
+  /** The amount actually debited (may differ from the default). */
+  postedAmountMinor: number | null;
+  /** Debitable = the occurrence date has arrived and it isn't debited yet. */
+  debitable: boolean;
+}
+
+/**
+ * The per-occurrence schedule for active recurring INCOME rules: each expected
+ * pay date, whether it has been "debited" (materialised into its account), and
+ * whether it's ready to debit now. Powers the Debit table on the Income page.
+ * Occurrences run from a year back to a quarter ahead so history and what's
+ * coming are both visible.
+ */
+export async function getRecurringIncomeSchedule(): Promise<IncomeOccurrence[]> {
+  const { user, dek } = await requireUser();
+  const today = startOfDay(new Date());
+  const from = subMonths(today, 12);
+  const to = addMonths(today, 3);
+
+  const [rawRules, rawPosted] = await Promise.all([
+    prisma.recurringRule.findMany({
+      where: { userId: user.id, type: "income", isActive: true },
+      include: { account: true },
+    }),
+    prisma.transaction.findMany({
+      where: { userId: user.id, status: "posted", type: "income", recurringRuleId: { not: null } },
+    }),
+  ]);
+
+  const rules = rawRules.map((r) => decryptRecurring(r, dek));
+  const postedByKey = new Map<string, number>();
+  for (const raw of rawPosted) {
+    const t = decryptTransaction(raw, dek);
+    if (t.recurringRuleId) postedByKey.set(occurrenceKey(t.recurringRuleId, t.date), t.amountMinor);
+  }
+
+  const rows: IncomeOccurrence[] = [];
+  for (const r of rules) {
+    for (const date of expandRecurrence(
+      { frequency: r.frequency as never, interval: r.interval, startDate: r.startDate, endDate: r.endDate, occurrenceCount: r.occurrenceCount },
+      from,
+      to,
+    )) {
+      const key = occurrenceKey(r.id, date);
+      const postedAmountMinor = postedByKey.get(key);
+      const debited = postedAmountMinor != null;
+      rows.push({
+        key,
+        ruleId: r.id,
+        ruleName: r.name,
+        accountId: r.accountId,
+        accountName: r.account?.name ?? "",
+        color: r.account?.color ?? "#64748b",
+        currency: r.currency,
+        date,
+        defaultAmountMinor: r.amountMinor,
+        debited,
+        postedAmountMinor: postedAmountMinor ?? null,
+        debitable: !debited && date.getTime() <= today.getTime(),
+      });
+    }
+  }
+
+  // Newest first: upcoming pay dates, then the one ready to debit, then history.
+  rows.sort((a, b) => b.date.getTime() - a.date.getTime());
+  return rows;
 }
 
 // ── PDCs ──────────────────────────────────────────────────────────────────────

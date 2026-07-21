@@ -425,6 +425,95 @@ export async function postRecurringOccurrence(id: string): Promise<ActionResult>
   }
 }
 
+const debitOccurrenceSchema = z.object({
+  ruleId: z.string().min(1),
+  /** The occurrence's own date (an expected pay date of the rule). */
+  date: z.coerce.date(),
+  /** Optional override — the salary that actually landed may differ. */
+  amount: z.coerce.number().finite().positive("Enter an amount").optional(),
+});
+
+/** The day-window [startOfDay, endOfDay] an occurrence date falls in. */
+function dayWindow(date: Date): { gte: Date; lte: Date } {
+  const gte = startOfDay(date);
+  return { gte, lte: new Date(gte.getTime() + 86_400_000 - 1) };
+}
+
+/**
+ * "Debit" one occurrence of a recurring INCOME rule: materialise it as a posted
+ * income transaction on its own account, so the money finally shows up in that
+ * account's balance. Idempotent — an occurrence can be debited only once — and
+ * the amount can be adjusted to whatever actually landed.
+ */
+export async function debitRecurringOccurrence(input: unknown): Promise<ActionResult> {
+  try {
+    const { user, dek } = await requireUser();
+    const data = debitOccurrenceSchema.parse(input);
+    const raw = await prisma.recurringRule.findFirst({
+      where: { id: data.ruleId, userId: user.id, type: "income" },
+    });
+    if (!raw) return { ok: false, error: "Income rule not found" };
+    const rule = decryptRecurring(raw, dek);
+    const day = startOfDay(data.date);
+
+    // One debit per occurrence.
+    const existing = await prisma.transaction.findFirst({
+      where: {
+        userId: user.id,
+        recurringRuleId: rule.id,
+        type: "income",
+        status: "posted",
+        date: dayWindow(day),
+      },
+    });
+    if (existing) return { ok: false, error: "This income is already debited" };
+
+    const amountMinor = data.amount != null ? toMinor(data.amount, rule.currency) : rule.amountMinor;
+    await prisma.transaction.create({
+      data: {
+        userId: user.id,
+        type: "income",
+        method: "account",
+        amountEnc: encInt(amountMinor, dek),
+        currency: rule.currency,
+        date: day,
+        accountId: rule.accountId,
+        categoryId: rule.categoryId,
+        noteEnc: encStr(rule.note ?? rule.name, dek),
+        tagsEnc: encStr("[]", dek),
+        recurringRuleId: rule.id,
+        status: "posted",
+      },
+    });
+    revalidateAll();
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Reverse a debit: remove the posted transaction for that occurrence. */
+export async function undoRecurringOccurrence(input: unknown): Promise<ActionResult> {
+  try {
+    const { user } = await requireUser();
+    const data = z.object({ ruleId: z.string().min(1), date: z.coerce.date() }).parse(input);
+    const res = await prisma.transaction.deleteMany({
+      where: {
+        userId: user.id,
+        recurringRuleId: data.ruleId,
+        type: "income",
+        status: "posted",
+        date: dayWindow(startOfDay(data.date)),
+      },
+    });
+    if (res.count === 0) return { ok: false, error: "Nothing to undo" };
+    revalidateAll();
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 // ── PDCs ────────────────────────────────────────────────────────────────────
 
 export async function savePdc(input: unknown): Promise<ActionResult> {

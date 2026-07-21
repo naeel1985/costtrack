@@ -1,8 +1,15 @@
-import { getAccountsWithBalances, getCategories, getRecurringRules, getTransactions } from "@/server/queries";
+import {
+  getAccountsWithBalances,
+  getCategories,
+  getRecurringIncomeSchedule,
+  getRecurringRules,
+  getTransactions,
+} from "@/server/queries";
 import { PageHeader } from "@/components/shared";
 import { AddTransactionButton } from "@/components/add-transaction-button";
 import { TransactionsView, type TxRow } from "@/components/transactions/transactions-view";
 import { RecurringSection, type RecurringRow } from "@/components/transactions/recurring-section";
+import { IncomeScheduleSection } from "@/components/transactions/income-schedule-section";
 import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
 import { upcomingStatements } from "@/lib/card-cycle";
 import { expandRecurrence } from "@/lib/projection";
@@ -10,11 +17,12 @@ import { addMonths, endOfMonth, startOfMonth, subMonths } from "date-fns";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
-  const [txs, categories, accounts, rules] = await Promise.all([
+  const [txs, categories, accounts, rules, incomeSchedule] = await Promise.all([
     getTransactions({ type: kind }),
     getCategories(),
     getAccountsWithBalances(),
     getRecurringRules(),
+    kind === "income" ? getRecurringIncomeSchedule() : Promise.resolve([]),
   ]);
 
   const accountsLite: AccountLite[] = accounts.map((a) => ({
@@ -190,6 +198,8 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
         }
         action={<AddTransactionButton txType={kind} label={isIncome ? "Add income" : "Add cost"} size="sm" />}
       />
+
+      {isIncome && <IncomeScheduleSection occurrences={incomeSchedule} />}
 
       {!isIncome && (
         <div className="grid gap-4 lg:grid-cols-2">

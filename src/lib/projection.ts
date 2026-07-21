@@ -170,15 +170,28 @@ export function expandRecurrence(
   return dates;
 }
 
+/**
+ * Stable identity for a single occurrence of a rule on a given day. Used to
+ * reconcile a projected occurrence with a materialised ("debited") transaction
+ * so the same money is never counted twice — once as a posted balance and again
+ * as a forward-projected event.
+ */
+export function occurrenceKey(ruleId: string, date: Date): string {
+  return `${ruleId}|${startOfDay(date).getTime()}`;
+}
+
 export function eventsFromRecurring(
   rules: RecurringInput[],
   from: Date,
   to: Date,
+  /** Occurrence keys already materialised as posted transactions — skipped. */
+  skip?: ReadonlySet<string>,
 ): ProjectionEvent[] {
   const events: ProjectionEvent[] = [];
   for (const rule of rules) {
     const sign = rule.type === "income" ? 1 : -1;
     for (const date of expandRecurrence(rule, from, to)) {
+      if (skip?.has(occurrenceKey(rule.id, date))) continue;
       events.push({
         date,
         accountId: rule.accountId,

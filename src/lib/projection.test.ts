@@ -5,6 +5,7 @@ import {
   eventsFromProvisions,
   eventsFromRecurring,
   expandRecurrence,
+  occurrenceKey,
   projectBalances,
   type PdcInput,
   type ProjectionAccount,
@@ -126,6 +127,38 @@ describe("projectBalances — recurring generation", () => {
     expect(result.perAccount["acc1"].endBalanceMinor).toBe(1_300_00);
     // Minimum happens after rent, before salary: 800.
     expect(result.perAccount["acc1"].minBalanceMinor).toBe(800_00);
+  });
+});
+
+describe("eventsFromRecurring — skipping debited occurrences", () => {
+  const salary: RecurringInput = {
+    id: "salary",
+    name: "Salary",
+    type: "income",
+    frequency: "monthly",
+    interval: 1,
+    startDate: d("2026-01-25"),
+    endDate: null,
+    occurrenceCount: null,
+    amountMinor: 500_00,
+    accountId: "acc1",
+  };
+
+  it("omits an occurrence whose key is in the skip set", () => {
+    const skip = new Set([occurrenceKey("salary", d("2026-02-25"))]);
+    const events = eventsFromRecurring([salary], d("2026-01-01"), d("2026-03-31"), skip);
+    expect(events.map((e) => ymd(e.date))).toEqual(["2026-01-25", "2026-03-25"]);
+  });
+
+  it("occurrenceKey ignores time-of-day (same day → same key)", () => {
+    const morning = new Date(2026, 1, 25, 8, 30);
+    const evening = new Date(2026, 1, 25, 22, 15);
+    expect(occurrenceKey("r", morning)).toBe(occurrenceKey("r", evening));
+    expect(occurrenceKey("r", morning)).not.toBe(occurrenceKey("r", d("2026-02-26")));
+  });
+
+  it("keys are scoped per rule id", () => {
+    expect(occurrenceKey("a", d("2026-02-25"))).not.toBe(occurrenceKey("b", d("2026-02-25")));
   });
 });
 
