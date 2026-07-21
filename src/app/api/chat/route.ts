@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAuth } from "@/server/auth";
 import { createToolContext } from "@/server/ai/tools";
-import { runAssistant, type ChatMessage } from "@/server/ai/groq";
+import { runAssistantStream, isConfigured, type ChatMessage } from "@/server/ai/groq";
 
 // Never cached, never stored — every request is self-contained.
 export const dynamic = "force-dynamic";
@@ -29,6 +29,9 @@ export async function POST(req: NextRequest) {
   if (!auth.user.emailVerified && auth.user.role !== "admin") {
     return NextResponse.json({ error: "Verify your email first." }, { status: 403 });
   }
+  if (!isConfigured()) {
+    return NextResponse.json({ error: "The assistant isn't configured yet." }, { status: 503 });
+  }
 
   let body: unknown;
   try {
@@ -42,16 +45,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Send a message." }, { status: 400 });
   }
 
-  try {
-    const ctx = await createToolContext(auth.user.id, auth.dek);
-    const raw = await runAssistant(messages, ctx);
-    const reply = ctx.tok.detokenize(raw); // restore real names for the user only
-    return NextResponse.json(
-      { reply },
-      { headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } },
-    );
-  } catch (e) {
-    const message = e instanceof Error ? e.message : "The assistant is unavailable.";
-    return NextResponse.json({ error: message }, { status: 502 });
-  }
+  const ctx = await createToolContext(auth.user.id, auth.dek);
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for await (const chunk of runAssistantStream(messages, ctx)) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+      } catch {
+        controller.enqueue(encoder.encode("\n\n_Sorry — I hit an error answering that._"));
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+      "X-Robots-Tag": "noindex",
+    },
+  });
 }

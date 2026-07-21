@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { LetterAvatar } from "@/components/letter-avatar";
 import { ProfileDialog } from "@/components/profile-dialog";
+import { clearStoredChat } from "@/lib/chat-storage";
 import { logout } from "@/server/auth-actions";
 
 export interface ShellUser {
@@ -69,7 +70,10 @@ export function UserMenu({ user, compact = false }: { user: ShellUser; compact?:
           <DropdownMenuSeparator />
           <DropdownMenuItem
             className="text-negative focus:text-negative"
-            onClick={() => startTransition(() => void logout())}
+            onClick={() => {
+              clearStoredChat(); // the conversation ends with the session
+              startTransition(() => void logout());
+            }}
           >
             <LogOut /> Log out
           </DropdownMenuItem>

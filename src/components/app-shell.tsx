@@ -8,6 +8,7 @@ import { NAV_ITEMS } from "@/components/nav-items";
 import { ModeToggle } from "@/components/mode-toggle";
 import { useApp } from "@/components/app-interactive";
 import { UserMenu, type ShellUser } from "@/components/user-menu";
+import { ChatWidget } from "@/components/chat/chat-widget";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -142,6 +143,9 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
           );
         })}
       </nav>
+
+      {/* Floating assistant — available on every page */}
+      <ChatWidget />
     </div>
   );
 }
