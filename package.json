@@ -8,7 +8,6 @@
     "build": "prisma generate && next build --webpack",
     "start": "node server.js",
     "lint": "eslint",
-    "vendor:core": "node scripts/vendor-core.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "prisma generate",
@@ -24,7 +23,6 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@cashflow/core": "file:vendor/cashflow-core.tgz",
     "@hookform/resolvers": "^5.4.0",
     "@prisma/client": "^6.19.3",
     "@radix-ui/react-checkbox": "^1.3.7",

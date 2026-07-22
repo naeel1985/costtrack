@@ -48,32 +48,44 @@ place it.
 > fails **even when a `workspaces` field merely exists in an ancestor** package.json above
 > the app. So the monorepo `apps/web` nesting was abandoned.
 >
-> **Final layout (flat, cPanel-native):**
-> - The **web app lives at the repo root** again (`src/`, `server.js`, `package.json`, …) —
->   exactly the single-app shape cPanel expects. There is **no `apps/` directory and no
->   `workspaces` field anywhere.**
-> - The shared engines still live once in **`packages/core`**, but the web app consumes them
->   as a **vendored tarball**: `"@cashflow/core": "file:vendor/cashflow-core.tgz"` (a plain
->   `file:` dep — no symlinks, no workspace machinery). `packages/core` is otherwise inert
->   for the web build; it's the source for the tarball and for the future mobile app.
-> - `npm run vendor:core` repacks `packages/core` → `vendor/cashflow-core.tgz` (commit it).
-> - Verified locally in exactly the cPanel shape: clean `npm install` at the root populates
->   `node_modules/.bin/{prisma,next}`, `prisma generate` + `next build --webpack` compile,
->   98 tests pass (80 core + 18 web).
+> **Final layout (flat, cPanel-native) — and NO `@cashflow/core` npm package.**
+> Two further cPanel realities forced the last simplification: (a) even with
+> `workspaces=false` in an `.npmrc`, the host still enters workspace mode (the setting is
+> forced from a higher-priority source — an env var or a stale `package.json` at npm's
+> `--prefix`, `/home/…/nodevenv/<app>/22/lib`); and (b) a `file:` tarball dependency
+> resolves relative to that **prefix**, not the repo, so `file:vendor/…tgz` is looked up
+> under the nodevenv and fails `ENOENT`. A `file:` dep simply cannot work here.
+>
+> - The **web app lives at the repo root** (`src/`, `server.js`, `package.json`, …) — the
+>   single-app shape cPanel expects. **No `apps/`, no `workspaces`, no `@cashflow/core`
+>   package, no `file:` dep, no tarball, no `transpilePackages`.**
+> - The shared engines live once in **`packages/core/src`** and are imported by the web app
+>   as **plain in-project source** via relative paths (the `src/lib/<engine>.ts` shims do
+>   `export * from "../../packages/core/src/<engine>"`). Next compiles them like any project
+>   file; there is nothing for npm to resolve. `packages/core` keeps its own
+>   `package.json`/tests so the engines can be tested standalone and shared with mobile
+>   later (via a published registry package — the only sharing mechanism cPanel won't fight).
+> - Because the host forces workspace mode, install on the server with
+>   **`npm install --no-workspaces`** (a CLI flag beats the forced setting). The repo itself
+>   has no workspaces, so a freshly-created cPanel app/nodevenv would not force it.
+> - Verified locally: clean `npm install` (normal deps only), `prisma generate` +
+>   `next build --webpack` compile, typecheck clean, 98 tests pass (80 core + 18 web).
 
 **Deploy runbook (cPanel / Passenger — flat single app):**
 1. Put the repo at the cPanel app path (a fresh `git clone` of `main` is cleanest).
 2. cPanel **Setup Node.js App**: **Application root = the repo root** (the folder that
    contains `server.js` and `package.json`), **startup file = `server.js`**.
-3. Run **NPM Install** (or `npm install` in that folder): installs the web deps **and
-   extracts `vendor/cashflow-core.tgz` into `node_modules/@cashflow/core`** — no workspaces.
+3. Install in the terminal with **`npm install --no-workspaces`** (the host forces
+   workspace mode; this flag overrides it, and there are only normal deps to install).
    Confirm with `ls node_modules/.bin/prisma`. Then `npm run build`.
+   - *To make the cPanel "Run NPM Install" button work without the flag:* clear the stale
+     workspace setting — check `cat /home/<user>/nodevenv/<app>/22/lib/package.json` for a
+     leftover `workspaces` field and `env | grep -i workspace`; simplest is to **destroy
+     the app + its nodevenv and recreate** against this (now permanently flat) repo.
 4. Ensure env vars are visible to the app (`DATABASE_URL`, `DIRECT_URL`, `SERVER_KEY`,
    `SESSION_SECRET`, `SMTP_*`, `APP_URL`, `GROQ_API_KEY`, `GROQ_MODEL`). `SERVER_KEY`
    **must be identical to production** or existing sessions/data can't be unsealed.
 5. Restart; smoke-test: load `/`, log in, load `/dashboard`, run the assistant.
-6. **When `packages/core` changes:** run `npm run vendor:core` locally, commit the updated
-   `vendor/cashflow-core.tgz`, redeploy.
 
 ### 2. Does `/api/chat` streaming survive Passenger?
 **Cannot verify from here — needs your production host.** What I can confirm: the route
