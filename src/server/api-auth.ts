@@ -2,6 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { getAuth, type AuthContext } from "@/server/auth";
 import { serialize } from "@/server/api-serialize";
+import type { MutationResult } from "@/server/mutations/types";
 
 /**
  * The API equivalent of `requireUser()`. Same `getAuth` resolution (cookie OR
@@ -56,6 +57,38 @@ export async function apiJson<T>(produce: () => Promise<T>): Promise<NextRespons
       return NextResponse.json({ error: e.message }, { status: e.status });
     }
     console.error("[api/v1] handler error:", e);
+    return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
+  }
+}
+
+/**
+ * The write-endpoint shape: authenticate, read the JSON body, run a shared
+ * mutation core with the resolved auth, and map its `MutationResult` to an HTTP
+ * response — `status` on failure, `{ ok, id? }` on success. The core is the same
+ * one the web server action calls, so there's a single source of truth.
+ */
+export async function apiMutation(
+  req: Request,
+  produce: (auth: AuthContext, body: unknown) => Promise<MutationResult>,
+): Promise<NextResponse> {
+  const gate = await requireApiUser();
+  if (!gate.ok) return gate.response;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    body = undefined; // absent/invalid body — let the core's validation decide
+  }
+
+  try {
+    const result = await produce(gate.auth, body);
+    if (result.ok) {
+      return NextResponse.json(result.id ? { ok: true, id: result.id } : { ok: true });
+    }
+    return NextResponse.json({ error: result.error }, { status: result.status ?? 400 });
+  } catch (e) {
+    console.error("[api/v1] mutation error:", e);
     return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
   }
 }
