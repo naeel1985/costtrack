@@ -32,8 +32,9 @@
   ],
   "exclude": [
     "node_modules",
-    "vitest.config.ts",
+    "**/vitest.config.ts",
     "**/*.test.ts",
-    "scripts/**"
+    "scripts/**",
+    "packages/core/tsconfig.json"
   ]
 }
