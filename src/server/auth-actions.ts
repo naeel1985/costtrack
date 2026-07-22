@@ -12,25 +12,17 @@ import {
   hashPassword,
   hashToken,
   rewrapDek,
-  unwrapDek,
   unwrapDekWithRecovery,
-  verifyPassword,
   wrapDekWithRecovery,
 } from "@/lib/crypto";
 import {
   forgotPasswordSchema,
-  loginSchema,
   registerSchema,
   resendSchema,
   resetPasswordSchema,
 } from "@/lib/auth-schemas";
-import {
-  createSession,
-  destroySession,
-  getAuth,
-  isLockedOut,
-  recordLoginAttempt,
-} from "@/server/auth";
+import { createSession, destroySession, getAuth } from "@/server/auth";
+import { authenticateCredentials } from "@/server/login-core";
 import { sendPasswordResetEmail, sendVerificationEmail } from "@/server/mailer";
 import { encStr } from "@/server/crypto-map";
 
@@ -136,48 +128,12 @@ export async function registerUser(input: unknown): Promise<AuthResult> {
 
 export async function loginUser(input: unknown): Promise<AuthResult> {
   try {
-    const data = loginSchema.parse(input);
-    const identifier = data.identifier.toLowerCase().trim();
-
-    if (await isLockedOut(identifier)) {
-      await recordLoginAttempt({ identifier, success: false, reason: "locked" });
-      return { ok: false, error: "Too many attempts. Try again later." };
-    }
-
-    const user = await prisma.user.findFirst({
-      where: { OR: [{ email: identifier }, { username: identifier }] },
-    });
-
-    // Uniform failure to avoid leaking which part was wrong.
-    const invalid: AuthResult = { ok: false, error: "Invalid username or password" };
-
-    if (!user) {
-      await recordLoginAttempt({ identifier, success: false, reason: "no_such_user" });
-      return invalid;
-    }
-    if (!verifyPassword(data.password, user.passwordHash)) {
-      await recordLoginAttempt({ identifier, userId: user.id, success: false, reason: "bad_password" });
-      return invalid;
-    }
-    if (!user.isActive) {
-      await recordLoginAttempt({ identifier, userId: user.id, success: false, reason: "disabled" });
-      return { ok: false, error: "This account is disabled." };
-    }
-    if (!user.emailVerified && user.role !== "admin") {
-      await recordLoginAttempt({ identifier, userId: user.id, success: false, reason: "unverified" });
-      return { ok: false, error: "Please verify your email before signing in." };
-    }
-
-    let dek: Buffer;
-    try {
-      dek = unwrapDek(data.password, { dekWrapped: user.dekWrapped, dekSalt: user.dekSalt });
-    } catch {
-      await recordLoginAttempt({ identifier, userId: user.id, success: false, reason: "dek_error" });
-      return invalid;
-    }
-
-    await createSession(user.id, dek);
-    await recordLoginAttempt({ identifier, userId: user.id, success: true, reason: "ok" });
+    // Credential check (lockout, password, DEK unwrap) is shared with the mobile
+    // API via authenticateCredentials; the web path differs only in that it hands
+    // the session back as a cookie rather than a bearer token.
+    const outcome = await authenticateCredentials(input);
+    if (!outcome.ok) return { ok: false, error: outcome.error };
+    await createSession(outcome.userId, outcome.dek);
     return { ok: true };
   } catch (e) {
     return fail(e);

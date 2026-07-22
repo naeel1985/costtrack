@@ -36,8 +36,15 @@ async function requestMeta() {
   return { ip, userAgent };
 }
 
-/** Create a session, seal the DEK with the server key, and set the cookie. */
-export async function createSession(userId: string, dek: Buffer) {
+/**
+ * Create a session row, seal the DEK with the server key, and return the raw
+ * token + expiry. Transport-agnostic: the web wraps this to set a cookie, the
+ * mobile API returns the token in the response body.
+ */
+export async function createSessionToken(
+  userId: string,
+  dek: Buffer,
+): Promise<{ token: string; expiresAt: Date }> {
   const token = generateToken();
   const { ip, userAgent } = await requestMeta();
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86_400_000);
@@ -51,6 +58,12 @@ export async function createSession(userId: string, dek: Buffer) {
       expiresAt,
     },
   });
+  return { token, expiresAt };
+}
+
+/** Create a session and set the browser cookie (web login). */
+export async function createSession(userId: string, dek: Buffer) {
+  const { token, expiresAt } = await createSessionToken(userId, dek);
   const jar = await cookies();
   jar.set(COOKIE, token, {
     httpOnly: true,
@@ -70,11 +83,30 @@ export async function destroySession() {
   }
 }
 
+/** Delete a session by id — used by the API logout (bearer has no cookie to clear). */
+export async function revokeSession(sessionId: string) {
+  await prisma.session.deleteMany({ where: { id: sessionId } });
+}
+
+/**
+ * Resolve the session token from either transport: the `cf_session` cookie
+ * (web) or an `Authorization: Bearer <token>` header (mobile). Cookie wins when
+ * both are present. The token itself is identical — a `Session` row is
+ * transport-agnostic — so downstream lookup is the same for both clients.
+ */
+async function resolveSessionToken(): Promise<string | null> {
+  const jar = await cookies();
+  const cookieToken = jar.get(COOKIE)?.value;
+  if (cookieToken) return cookieToken;
+  const authz = (await headers()).get("authorization");
+  if (authz?.startsWith("Bearer ")) return authz.slice("Bearer ".length).trim() || null;
+  return null;
+}
+
 /** Resolve the current authenticated user + their DEK, or null.
  *  Wrapped in React `cache` so repeated calls within one request hit the DB once. */
 export const getAuth = cache(async (): Promise<AuthContext | null> => {
-  const jar = await cookies();
-  const token = jar.get(COOKIE)?.value;
+  const token = await resolveSessionToken();
   if (!token) return null;
 
   const session = await prisma.session.findUnique({
