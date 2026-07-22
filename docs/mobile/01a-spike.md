@@ -1,155 +1,93 @@
-# Phase 1a — De-risking spike: results & go/no-go
+# Phase 1a — De-risking spike: results
 
-**Branch:** `mobile/phase-1a-spike` (nothing merged to `master`, nothing deployed).
-**Scope run this turn:** steps 1–2 (per "report after step 2 before continuing").
-Steps 3–5 are **not started**, awaiting your go/no-go.
+**Status: complete.** The spike is what surfaced the one architectural constraint that
+reshapes the whole mobile effort, so it did its job. This is the clean, final record;
+the running blow-by-blow has been collapsed into the outcome. The revised plan that
+follows from it is in [`02-mobile-plan.md`](./02-mobile-plan.md).
 
-## What the restructure did
-- Repo is now an **npm-workspaces monorepo**: `apps/web` (the whole Next app, moved
-  intact) + `packages/core` (the pure engines) + root workspace manager.
-- `packages/core` (`@cashflow/core`) now owns the 8 pure modules — `money`, `domain`,
-  `initials`, `card-cycle`, `salary-period`, `cashflow-timeline`, `projection`,
-  `notifications` — plus their 6 Vitest suites. Only dependency: `date-fns`.
-- The web app consumes them via **re-export shims** (`apps/web/src/lib/<engine>.ts` →
-  `export * from "@cashflow/core/<engine>"`), so **every existing `@/lib/…` import keeps
-  working with zero call-site churn.** (Shims are temporary; call sites can be pointed
-  straight at `@cashflow/core` in a later pass.)
-- `next.config.ts` gains `transpilePackages: ["@cashflow/core"]` (core ships as TS
-  source; Next compiles it — no separate build step).
-- `.gitignore` de-anchored so nested `node_modules/` and `.next/` are ignored.
+## TL;DR
 
----
+- **The build/engine-extraction works.** The pure engines were extracted into
+  `packages/core` and the app builds and passes 98 tests on top of them.
+- **The headline finding: the cPanel/CloudLinux host cannot run an npm monorepo.** Its
+  Node Selector npm rejects workspaces outright and mis-resolves `file:` dependencies.
+  Every workspace-based sharing mechanism failed on the host; only a **flat single-app
+  repo with the engines imported as plain in-project source** deploys.
+- **Consequence for mobile:** engine-sharing between web and mobile **cannot** use an npm
+  workspace. It must use a host-neutral mechanism (a published package, a git dependency,
+  or a copy). This is the main input to the new plan.
 
-## Note on each of the five
+## What was tested vs. what we found
 
-### 1. Extract `packages/core` → `next build --webpack` → Passenger smoke deploy
-**Local half: DONE, green.** Verified on this branch:
-- `npm install` at root links `@cashflow/core` and `@cashflow/web` as workspaces and
-  **hoists all deps to root `node_modules`** (the exact condition we needed to test).
-- `npm run build` → **`prisma generate` emits the client to the hoisted
-  `node_modules/@prisma/client`**, then **`✓ Compiled successfully`** with the webpack
-  builder. This is the single biggest risk (Prisma engine under hoisted `node_modules`)
-  and it passes locally.
-- `packages/core` typecheck clean; `apps/web` `tsc --noEmit` clean.
-- Tests: **core 80 + web 18 = 98** (unchanged total), all pass, chained via `npm test`.
-- The **relocated `server.js` boots** (`node apps/web/server.js` → "Cashflow ready") and
-  serves the public route (HTTP 200), resolving `next` from the hoisted root
-  `node_modules`.
+| # | Spike step | Result |
+|---|---|---|
+| 1 | Extract `packages/core`, build, deploy on Passenger | Extraction + `next build --webpack` ✅ locally and on the host. **Monorepo/workspaces ❌ on cPanel** — see below. Final flat layout deploys. |
+| 2 | Does `/api/chat` streaming survive Passenger? | App-level streaming is real (`ReadableStream`, verified via `curl -N`). **Production proxy-buffering check still pending** on the host. Only gates the mobile *assistant*. |
+| 3 | `Intl.NumberFormat` (AED) on Hermes | **Not yet verified** on a device. Only `money.ts` + `projection.ts` warning strings use `Intl`; fallback is a small manual formatter if needed. Carried into the mobile plan. |
+| 4 | Bearer-aware `getAuth` + `POST /api/v1/auth/login` | **Not built.** Design stands (session sealing is transport-agnostic). Moved into the mobile plan. |
+| 5 | `GET /api/v1/dashboard` + `POST /api/v1/income/debit` | **Not built.** Moved into the mobile plan as the endpoint pattern. |
 
-**Remaining (YOUR action — I can't reach cPanel): the real Passenger smoke deploy.**
-Runbook below. Caveat: the local build is on Windows/`native` engine; cPanel is
-CloudLinux, so the `rhel-openssl-3.0.x` engine path is only proven by the deploy.
-The schema already lists that `binaryTarget`, so `prisma generate` on the host should
-place it.
+## The cPanel constraint, precisely
 
-> **UPDATE (2026-07-22) — cPanel/CloudLinux cannot use npm workspaces at all; the repo is
-> now FLAT.** On the host, npm refuses any workspace tree — `npm install` at a workspace
-> root installs nothing (`npm query .workspace` → `[]`, "No workspaces found!"), and it
-> fails **even when a `workspaces` field merely exists in an ancestor** package.json above
-> the app. So the monorepo `apps/web` nesting was abandoned.
->
-> **Final layout (flat, cPanel-native) — and NO `@cashflow/core` npm package.**
-> Two further cPanel realities forced the last simplification: (a) even with
-> `workspaces=false` in an `.npmrc`, the host still enters workspace mode (the setting is
-> forced from a higher-priority source — an env var or a stale `package.json` at npm's
-> `--prefix`, `/home/…/nodevenv/<app>/22/lib`); and (b) a `file:` tarball dependency
-> resolves relative to that **prefix**, not the repo, so `file:vendor/…tgz` is looked up
-> under the nodevenv and fails `ENOENT`. A `file:` dep simply cannot work here.
->
-> - The **web app lives at the repo root** (`src/`, `server.js`, `package.json`, …) — the
->   single-app shape cPanel expects. **No `apps/`, no `workspaces`, no `@cashflow/core`
->   package, no `file:` dep, no tarball, no `transpilePackages`.**
-> - The shared engines live once in **`packages/core/src`** and are imported by the web app
->   as **plain in-project source** via relative paths (the `src/lib/<engine>.ts` shims do
->   `export * from "../../packages/core/src/<engine>"`). Next compiles them like any project
->   file; there is nothing for npm to resolve. `packages/core` keeps its own
->   `package.json`/tests so the engines can be tested standalone and shared with mobile
->   later (via a published registry package — the only sharing mechanism cPanel won't fight).
-> - Because the host forces workspace mode, install on the server with
->   **`npm install --no-workspaces`** (a CLI flag beats the forced setting). The repo itself
->   has no workspaces, so a freshly-created cPanel app/nodevenv would not force it.
-> - Verified locally: clean `npm install` (normal deps only), `prisma generate` +
->   `next build --webpack` compile, typecheck clean, 98 tests pass (80 core + 18 web).
+CloudLinux's Node Selector symlinks `node_modules` into a per-app "nodevenv" and runs npm
+with `--prefix /home/<user>/nodevenv/<app>/22/lib`. In that environment:
 
-**Deploy runbook (cPanel / Passenger — flat single app):**
-1. Put the repo at the cPanel app path (a fresh `git clone` of `main` is cleanest).
-2. cPanel **Setup Node.js App**: **Application root = the repo root** (the folder that
-   contains `server.js` and `package.json`), **startup file = `server.js`**.
-3. Install in the terminal with **`npm install --no-workspaces`** (the host forces
-   workspace mode; this flag overrides it, and there are only normal deps to install).
-   Confirm with `ls node_modules/.bin/prisma`. Then `npm run build`.
-   - *To make the cPanel "Run NPM Install" button work without the flag:* clear the stale
-     workspace setting — check `cat /home/<user>/nodevenv/<app>/22/lib/package.json` for a
-     leftover `workspaces` field and `env | grep -i workspace`; simplest is to **destroy
-     the app + its nodevenv and recreate** against this (now permanently flat) repo.
-4. Ensure env vars are visible to the app (`DATABASE_URL`, `DIRECT_URL`, `SERVER_KEY`,
-   `SESSION_SECRET`, `SMTP_*`, `APP_URL`, `GROQ_API_KEY`, `GROQ_MODEL`). `SERVER_KEY`
-   **must be identical to production** or existing sessions/data can't be unsealed.
-5. Restart; smoke-test: load `/`, log in, load `/dashboard`, run the assistant.
+1. **npm workspaces do not work** — `npm install` at a workspace root installs nothing
+   (`npm query .workspace` → `[]`, "No workspaces found!"), and it errors **even when a
+   `workspaces` field only exists in an ancestor** package.json above the app.
+2. **The host force-enters workspace mode** from a source higher-priority than a project
+   `.npmrc` (an env var / a stale `package.json` at the `--prefix`), so `workspaces=false`
+   in a file is ignored — only the CLI flag **`npm install --no-workspaces`** overrides it.
+3. **`file:` dependencies mis-resolve** — a `file:vendor/x.tgz` dep is looked up relative
+   to the nodevenv `--prefix`, not the repo, and fails `ENOENT`. So vendored tarballs and
+   `file:` links are out too.
 
-### 2. Does `/api/chat` streaming survive Passenger?
-**Cannot verify from here — needs your production host.** What I can confirm: the route
-returns a `ReadableStream` of raw UTF-8 text with `Cache-Control: no-store` and
-`X-Accel-Buffering: no`, and app-level streaming is real (confirmed live in an earlier
-session via `curl -N`). The open question is **proxy/Passenger buffering**, which is
-independent of the app.
+Sequence of approaches tried, each killed by the above: monorepo with hoisting → standalone
+`apps/web` workspace → drop `apps/*` from workspaces → remove the `workspaces` field
+entirely → vendored `file:` tarball → **(final)** no npm package at all.
 
-**Production test:**
-```bash
-curl -N -H "Cookie: cf_session=<your session token>" \
-     -H "Content-Type: application/json" \
-     -d '{"messages":[{"role":"user","content":"When is my next card payment due?"}]}' \
-     https://<prod-host>/api/chat
-```
-Tokens must arrive **incrementally**. If the whole answer lands at once after a pause,
-something is buffering.
+## Final web architecture (shipped to `main`)
 
-**Knobs to check (Apache/Passenger on cPanel):**
-- `PassengerBufferResponse off` — the key one; some builds buffer by default.
-- `PassengerMaxRequestTime 0` — so a long multi-tool-round stream isn't cut.
-- If nginx sits in front: `proxy_buffering off` (the `X-Accel-Buffering: no` header
-  already hints this).
+- **Flat single-app repo.** The Next app is at the repo root (`src/`, `server.js`,
+  `package.json`, `prisma/`). **No `apps/`, no `workspaces`, no `@cashflow/core` npm
+  package, no `file:` dep, no `transpilePackages`.**
+- **Engines shared as in-project source.** They live once in **`packages/core/src`**; the
+  app imports them through the existing `src/lib/<engine>.ts` shims, which now do
+  `export * from "../../packages/core/src/<engine>"`. Next compiles them like any project
+  file. `packages/core` keeps its own `package.json`/tests so the engines stay testable
+  standalone and can be shared with mobile later.
+- **The app's type-check excludes `packages/core`'s dev tooling** (`**/vitest.config.ts`),
+  which would otherwise fail on the host where `vitest` isn't installed.
+- Verified locally (incl. with `packages/core/node_modules` deleted, to mimic the host):
+  clean `npm install`, `prisma generate` + `next build --webpack` compile, type-check
+  clean, **98 tests** (80 core + 18 web).
 
-**If it can't be un-buffered:** serve the stream from a dedicated Node port that bypasses
-the buffering layer, or switch `/api/chat` to SSE with periodic keep-alive frames.
-**This gate only blocks the mobile *assistant* — the rest of v1 (reads, mutations, auth)
-does not depend on it.**
+## Deploy runbook (cPanel / Passenger — flat single app)
 
-### 3. `Intl.NumberFormat` on Hermes (AED) — NOT started (correctly, per the gate)
-Plan when we resume: verify grouping / 2-decimal / `AED ` placement / RTL on the target
-Hermes build; if absent or divergent, land a manual grouping fallback **inside
-`packages/core/money.ts`** so web and mobile stay byte-identical. (`money.ts` and
-`projection.ts`'s warning strings are the only `Intl` users.)
+1. Repo at the cPanel app path (fresh `git clone` of `main` is cleanest).
+2. **Setup Node.js App**: **Application root = repo root** (the folder with `server.js`),
+   **startup file = `server.js`**, mode Production.
+3. Install in the terminal with **`npm install --no-workspaces`**, then `npm run build`.
+   Confirm `ls node_modules/.bin/prisma` first.
+   - *To make the "Run NPM Install" button work without the flag:* the host's forced
+     workspace setting must be cleared at its source — easiest is to **destroy the app +
+     its nodevenv and recreate** against this (now permanently flat) repo.
+4. Set env vars (`DATABASE_URL`, `DIRECT_URL`, `SERVER_KEY`, `SESSION_SECRET`, `SMTP_*`,
+   `APP_URL`, `GROQ_API_KEY`, `GROQ_MODEL`). **`SERVER_KEY` must equal production's** or
+   encrypted data can't be unsealed.
+5. Start; smoke-test: `/`, log in, `/dashboard`, the assistant.
 
-### 4. Bearer-aware `getAuth` + `POST /api/v1/auth/login` — NOT started (after the gate)
-Plan: a `getAuth` that also reads `Authorization: Bearer <token>`; a login endpoint that
-returns the raw session token (no `Set-Cookie`). Session sealing is transport-agnostic
-and unchanged.
+## Still-open host checks (do once, when convenient)
+- **`/api/chat` streaming through Passenger** — `curl -N` the endpoint; confirm tokens
+  arrive incrementally. If buffered: `PassengerBufferResponse off`, `PassengerMaxRequestTime 0`
+  (nginx: `proxy_buffering off`). Only affects the assistant.
+- **Pre-existing lint debt** (not caused by this work): `server.js` `require()` imports,
+  `chat-widget.tsx` setState-in-effect, stray unused eslint-disable directives. Worth a
+  separate cleanup pass.
 
-### 5. `GET /api/v1/dashboard` + `POST /api/v1/income/debit` — NOT started (after the gate)
-Plan: thin JSON handlers wrapping the existing `getDashboard` / `debitRecurringOccurrence`
-logic, as the copy-paste pattern for the rest of the v1 surface.
-
----
-
-## Go / No-Go
-
-**Recommendation: conditional GO to steps 3–5, pending your two production checks.**
-- The build/hoisting risk (the thing most likely to invalidate the monorepo) is **green
-  locally**, including Prisma generation into hoisted `node_modules` and the relocated
-  `server.js` booting.
-- The two things I physically can't run — the **cPanel smoke deploy** and the
-  **production streaming test** — are yours. Run both from the branch.
-  - If the **deploy** is green → step 1 fully cleared.
-  - If **streaming** buffers and can't be fixed → proceed with steps 4–5 anyway (reads +
-    mutations + auth don't need it) and treat the mobile assistant as a separate,
-    later gate.
-
-**Nothing is committed or deployed.** The branch is ready for you to build/deploy and
-report back the two results, at which point we continue to steps 3–5.
-
-## Pre-existing (not caused by the spike)
-`npm run lint` surfaces issues in files the move didn't touch — `server.js` (`require()`
-imports), `chat-widget.tsx` (`setState` in an effect), and stray unused-eslint-disable
-directives in `scripts/`/`prisma/`. Confirmed pre-existing (`server.js` already uses
-`require()` on `master`). Out of scope for this spike; worth a separate cleanup.
+## What this means for the mobile plan
+The clean win: the engines are already isolated in `packages/core` with no Node/Prisma/
+Intl-hostile dependencies. The constraint: **do not reach for an npm workspace to share
+them** — the host won't have it. The revised plan picks a host-neutral sharing mechanism
+and drops the monorepo assumption from Phase 0's Decision 2. See
+[`02-mobile-plan.md`](./02-mobile-plan.md).
