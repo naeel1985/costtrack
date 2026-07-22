@@ -26,6 +26,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // The shared engines live in @cashflow/core as TypeScript source; Next
+  // compiles them as part of the app build (no separate build step).
+  transpilePackages: ["@cashflow/core"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
