@@ -5,6 +5,7 @@
   "description": "Pure, dependency-light financial engines shared by the web and mobile apps. No Node builtins, no DB — only date-fns. The source of truth for all money logic.",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "files": ["src"],
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*.ts",

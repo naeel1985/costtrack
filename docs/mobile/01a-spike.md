@@ -42,21 +42,36 @@ CloudLinux, so the `rhel-openssl-3.0.x` engine path is only proven by the deploy
 The schema already lists that `binaryTarget`, so `prisma generate` on the host should
 place it.
 
-**Deploy runbook (cPanel / Passenger):**
-1. Get the branch onto the server; from the **repo root** run `npm install` (workspace
-   install + hoist), then `npm run build` (runs `prisma generate` + `next build` in
-   `apps/web`).
-2. cPanel **Setup Node.js App**: set **Application root = repo root** and **startup file
-   = `apps/web/server.js`** (Passenger resolves `next` from the hoisted root
-   `node_modules`). *Alternative:* app root = `apps/web`, startup = `server.js` — Node
-   resolves `next` from `../../node_modules`. Either works; pick one.
-3. Ensure env vars are visible to the app (`DATABASE_URL`, `DIRECT_URL`, `SERVER_KEY`,
+> **UPDATE (2026-07-22) — cPanel/CloudLinux does not support npm workspaces.**
+> On the host, `npm install` at the workspace root installs **nothing** (`node_modules`
+> is a symlink into the nodevenv; `npm query .workspace` → `[]`; `npm install` →
+> "No workspaces found!"). CloudLinux's Node Selector npm won't drive a workspace/hoist
+> tree, so `prisma`/`next` bins never land and the build fails with
+> `prisma: command not found`. This is the Decision‑2 risk materialising.
+>
+> **Resolution applied (this branch):** the web app is now **standalone** — it depends on
+> `@cashflow/core` via a vendored tarball (`file:vendor/cashflow-core.tgz`), a plain
+> `file:` dep any npm handles, with no symlinks and no workspace machinery. `apps/*` was
+> dropped from the root `workspaces` (only `packages/*` remains), so `apps/web` installs
+> as an ordinary single app both locally and on cPanel. Verified locally: standalone
+> `apps/web` install extracts the tarball, `prisma generate` + `next build --webpack`
+> compile, 98 tests pass. The engines still live once in `packages/core`; the tarball is
+> regenerated with `npm run vendor:core` and committed.
+
+**Deploy runbook (cPanel / Passenger — standalone `apps/web`):**
+1. Get the branch onto the server (whole repo is fine; only `apps/web` is the app).
+2. cPanel **Setup Node.js App**: **Application root = `<repo>/apps/web`**, **startup file
+   = `server.js`**. This is the folder npm installs and Passenger boots.
+3. From `apps/web` (cPanel's "Run NPM Install", or `cd apps/web && npm install`): installs
+   the web deps **and extracts `vendor/cashflow-core.tgz` into `node_modules/@cashflow/core`**
+   — no workspaces involved. Then `npm run build` (`prisma generate` + `next build`).
+4. Ensure env vars are visible to the app (`DATABASE_URL`, `DIRECT_URL`, `SERVER_KEY`,
    `SESSION_SECRET`, `SMTP_*`, `APP_URL`, `GROQ_API_KEY`, `GROQ_MODEL`). `SERVER_KEY`
    **must be identical to production** or existing sessions/data can't be unsealed.
-4. Restart; smoke-test: load `/`, log in, load `/dashboard`, run the assistant.
-5. **If the build fails on the host** with a hoist/Prisma resolution error: try npm
-   `nohoist`/keeping web deps local, or fall back to a separate mobile repo consuming
-   `@cashflow/core` as a git dependency (Decision 2 fallbacks).
+5. Restart; smoke-test: load `/`, log in, load `/dashboard`, run the assistant.
+6. **When `packages/core` changes:** run `npm run vendor:core` locally, commit the updated
+   `apps/web/vendor/cashflow-core.tgz`, redeploy. (The tarball is the engines' snapshot the
+   app installs.)
 
 ### 2. Does `/api/chat` streaming survive Passenger?
 **Cannot verify from here — needs your production host.** What I can confirm: the route

@@ -3,15 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "workspaces": [
-    "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm --workspace apps/web run dev",
-    "build": "npm --workspace apps/web run build",
-    "start": "npm --workspace apps/web run start",
-    "lint": "npm --workspace apps/web run lint",
-    "test": "npm --workspace packages/core run test && npm --workspace apps/web run test",
-    "typecheck": "npm --workspace packages/core run typecheck && npm --workspace apps/web exec tsc -- --noEmit"
+    "vendor:core": "node scripts/vendor-core.mjs",
+    "dev": "npm --prefix apps/web run dev",
+    "build": "npm --prefix apps/web run build",
+    "start": "npm --prefix apps/web run start",
+    "lint": "npm --prefix apps/web run lint",
+    "test": "npm --workspace packages/core run test && npm --prefix apps/web run test",
+    "typecheck": "npm --workspace packages/core run typecheck && npm --prefix apps/web exec tsc -- --noEmit"
   }
 }
