@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const dest = join(root, "apps", "web", "vendor");
+const dest = join(root, "vendor");
 const coreDir = join(root, "packages", "core");
 
 mkdirSync(dest, { recursive: true });
