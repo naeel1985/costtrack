@@ -1,11 +1,15 @@
 import { requireUser } from "@/server/auth";
-import { getAccountsWithBalances, getCategories } from "@/server/queries";
+import { getAccountsWithBalances, getCategories, getNotifications } from "@/server/queries";
 import { AppInteractive } from "@/components/app-interactive";
 import { AppShell } from "@/components/app-shell";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { user } = await requireUser();
-  const [accounts, categories] = await Promise.all([getAccountsWithBalances(), getCategories()]);
+  const [accounts, categories, notifications] = await Promise.all([
+    getAccountsWithBalances(),
+    getCategories(),
+    getNotifications(),
+  ]);
 
   const accountsLite = accounts.map((a) => ({
     id: a.id,
@@ -27,6 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <AppInteractive accounts={accountsLite} categories={categoriesLite}>
       <AppShell
         user={{ fullName: user.fullName, username: user.username, email: user.email, role: user.role }}
+        notifications={notifications}
       >
         {children}
       </AppShell>

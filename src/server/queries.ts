@@ -46,6 +46,12 @@ import {
 } from "@/lib/salary-period";
 import { buildCashflowTimeline, type CashflowTimeline } from "@/lib/cashflow-timeline";
 import { cardCycleBills, nextDueDate, statementDateForDue } from "@/lib/card-cycle";
+import {
+  buildNotifications,
+  type AccountSignal,
+  type NotificationItem,
+  type SalaryReadySignal,
+} from "@/lib/notifications";
 
 /** The dashboard always builds a full year so any date in it can be inspected. */
 export const TIMELINE_MONTHS = 12;
@@ -708,6 +714,60 @@ export async function getRecurringIncomeSchedule(): Promise<IncomeOccurrence[]> 
   // Newest first: upcoming pay dates, then the one ready to debit, then history.
   rows.sort((a, b) => b.date.getTime() - a.date.getTime());
   return rows;
+}
+
+// ── Notifications ───────────────────────────────────────────────────────────────
+
+/**
+ * The user's live notifications, minus the ones they've already acknowledged.
+ * Derived from current balances, the 90-day projection and the recurring-income
+ * schedule; acknowledgement is persisted per-user (NotificationAck) so a
+ * dismissed alert stays dismissed across sessions and devices.
+ */
+export async function getNotifications(): Promise<NotificationItem[]> {
+  const { user } = await requireUser();
+  const [accounts, { result }, schedule, acks] = await Promise.all([
+    getAccountsWithBalances(),
+    getProjection({ horizonDays: 90 }),
+    getRecurringIncomeSchedule(),
+    prisma.notificationAck.findMany({ where: { userId: user.id }, select: { key: true } }),
+  ]);
+  const ackKeys = new Set(acks.map((a) => a.key));
+  const today = startOfDay(new Date());
+
+  const signals: AccountSignal[] = accounts
+    .filter((a) => !a.isSystem)
+    .map((a) => {
+      const stat = result.perAccount[a.id];
+      // For an account that's underwater today, find when it first climbs back.
+      const firstPositiveDate =
+        a.balanceMinor < 0 ? result.days.find((d) => (d.balances[a.id] ?? 0) >= 0)?.date ?? null : null;
+      return {
+        id: a.id,
+        name: a.name,
+        type: a.type,
+        currency: a.currency,
+        balanceMinor: a.balanceMinor,
+        creditLimitMinor: a.creditLimitMinor,
+        firstNegativeDate: stat?.firstNegativeDate ?? null,
+        firstPositiveDate,
+        minBalanceMinor: stat?.minBalanceMinor ?? a.balanceMinor,
+        minBalanceDate: stat?.minBalanceDate ?? today,
+      };
+    });
+
+  const salaryReady: SalaryReadySignal[] = schedule
+    .filter((o) => o.debitable)
+    .map((o) => ({
+      ruleId: o.ruleId,
+      ruleName: o.ruleName,
+      accountName: o.accountName,
+      amountMinor: o.defaultAmountMinor,
+      currency: o.currency,
+      date: o.date,
+    }));
+
+  return buildNotifications({ accounts: signals, salaryReady }).filter((n) => !ackKeys.has(n.key));
 }
 
 // ── PDCs ──────────────────────────────────────────────────────────────────────

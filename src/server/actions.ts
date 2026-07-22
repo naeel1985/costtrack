@@ -514,6 +514,29 @@ export async function undoRecurringOccurrence(input: unknown): Promise<ActionRes
   }
 }
 
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+/**
+ * Acknowledge (dismiss) one or more notifications. Only the opaque key is
+ * stored, scoped to the user, so the dismissal survives across sessions and
+ * devices. Idempotent — re-acknowledging is a no-op.
+ */
+export async function acknowledgeNotifications(keys: string[]): Promise<ActionResult> {
+  try {
+    const { user } = await requireUser();
+    const clean = [...new Set((keys ?? []).filter((k) => typeof k === "string" && k.length > 0 && k.length <= 300))];
+    if (clean.length === 0) return { ok: true };
+    await prisma.notificationAck.createMany({
+      data: clean.map((key) => ({ userId: user.id, key })),
+      skipDuplicates: true,
+    });
+    revalidateAll();
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 // ── PDCs ────────────────────────────────────────────────────────────────────
 
 export async function savePdc(input: unknown): Promise<ActionResult> {

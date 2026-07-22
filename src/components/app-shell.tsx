@@ -9,15 +9,25 @@ import { ModeToggle } from "@/components/mode-toggle";
 import { useApp } from "@/components/app-interactive";
 import { UserMenu, type ShellUser } from "@/components/user-menu";
 import { ChatWidget } from "@/components/chat/chat-widget";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { NotificationItem } from "@/lib/notifications";
 
 function isActive(pathname: string, href: string) {
   if (href === "/dashboard") return pathname === "/dashboard";
   return pathname.startsWith(href);
 }
 
-export function AppShell({ user, children }: { user: ShellUser; children: React.ReactNode }) {
+export function AppShell({
+  user,
+  notifications,
+  children,
+}: {
+  user: ShellUser;
+  notifications: NotificationItem[];
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
   const { openPalette, openQuickAdd } = useApp();
   const primary = NAV_ITEMS.filter((i) => i.primary);
@@ -102,14 +112,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: React.
           </div>
           <div className="hidden md:block" />
           <div className="flex items-center gap-1.5">
-            <button
-              onClick={openPalette}
-              aria-label="Open command palette"
-              className="hidden items-center gap-2 rounded-md border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 sm:flex md:hidden lg:flex"
-            >
-              <Command className="h-3.5 w-3.5" /> Search
-              <kbd className="rounded bg-muted px-1 font-mono text-[10px]">⌘K</kbd>
-            </button>
+            <NotificationBell initial={notifications} />
             <ModeToggle />
             <Button size="sm" className="gap-1.5 md:hidden" onClick={() => openQuickAdd("expense")}>
               <Plus className="h-4 w-4" /> Add

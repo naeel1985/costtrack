@@ -76,6 +76,7 @@ model User {
   budgets        Budget[]
   exchangeRates  ExchangeRate[]
   settings       AppSetting?
+  notificationAcks NotificationAck[]
 
   @@index([email])
   @@index([role])
@@ -375,6 +376,23 @@ model ExchangeRate {
   updatedAt DateTime @updatedAt
 
   @@unique([userId, base, quote])
+  @@index([userId])
+}
+
+// Which computed notifications a user has acknowledged. Notifications
+// themselves are derived on the fly (account going negative/positive, a salary
+// ready to debit) and identified by a deterministic `key`; storing only the
+// acknowledged keys makes "dismissed" survive across sessions and stay
+// per-user. The key carries ids/dates/type only — no amounts or names — so it's
+// low-sensitivity and kept plaintext like the other query columns.
+model NotificationAck {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key       String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, key])
   @@index([userId])
 }
 
