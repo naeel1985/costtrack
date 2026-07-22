@@ -2,16 +2,14 @@
   "name": "cashflow-monorepo",
   "version": "0.1.0",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
+  "//": "No npm `workspaces` field on purpose: cPanel/CloudLinux npm chokes on a workspace ancestor. apps/web is a standalone app that vendors the engines from packages/core via a tarball (npm run vendor:core). These scripts just cd into each package; they do not use workspace resolution.",
   "scripts": {
     "vendor:core": "node scripts/vendor-core.mjs",
     "dev": "npm --prefix apps/web run dev",
     "build": "npm --prefix apps/web run build",
     "start": "npm --prefix apps/web run start",
     "lint": "npm --prefix apps/web run lint",
-    "test": "npm --workspace packages/core run test && npm --prefix apps/web run test",
-    "typecheck": "npm --workspace packages/core run typecheck && npm --prefix apps/web exec tsc -- --noEmit"
+    "test": "npm --prefix packages/core run test && npm --prefix apps/web run test",
+    "typecheck": "npm --prefix packages/core run typecheck && npm --prefix apps/web exec tsc -- --noEmit"
   }
 }

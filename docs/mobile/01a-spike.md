@@ -51,9 +51,12 @@ place it.
 >
 > **Resolution applied (this branch):** the web app is now **standalone** — it depends on
 > `@cashflow/core` via a vendored tarball (`file:vendor/cashflow-core.tgz`), a plain
-> `file:` dep any npm handles, with no symlinks and no workspace machinery. `apps/*` was
-> dropped from the root `workspaces` (only `packages/*` remains), so `apps/web` installs
-> as an ordinary single app both locally and on cPanel. Verified locally: standalone
+> `file:` dep any npm handles, with no symlinks and no workspace machinery. The root
+> `package.json` has **no `workspaces` field at all** — CloudLinux npm chokes even when a
+> workspace field merely exists in an *ancestor* directory (running `npm install` inside
+> `apps/web` still errored "No workspaces found!" while the root listed `packages/*`).
+> The root is now just a task-runner (its scripts `cd`/`--prefix` into each package); the
+> whole repo can sit on the server and `apps/web` still installs as an ordinary app. Verified locally: standalone
 > `apps/web` install extracts the tarball, `prisma generate` + `next build --webpack`
 > compile, 98 tests pass. The engines still live once in `packages/core`; the tarball is
 > regenerated with `npm run vendor:core` and committed.

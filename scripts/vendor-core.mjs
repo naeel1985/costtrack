@@ -12,9 +12,12 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dest = join(root, "apps", "web", "vendor");
+const coreDir = join(root, "packages", "core");
 
 mkdirSync(dest, { recursive: true });
-execSync(`npm pack -w @cashflow/core --pack-destination "${dest}"`, { cwd: root, stdio: "inherit" });
+// Pack from inside packages/core (no workspace flags — the repo has no npm
+// workspaces, since cPanel's npm can't handle a workspace ancestor).
+execSync(`npm pack --pack-destination "${dest}"`, { cwd: coreDir, stdio: "inherit" });
 
 for (const f of readdirSync(dest)) {
   if (/^cashflow-core-.*\.tgz$/.test(f)) renameSync(join(dest, f), join(dest, "cashflow-core.tgz"));
