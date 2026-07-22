@@ -48,8 +48,8 @@ import { buildCashflowTimeline, type CashflowTimeline } from "@/lib/cashflow-tim
 import { cardCycleBills, nextDueDate, statementDateForDue } from "@/lib/card-cycle";
 import {
   buildNotifications,
-  type AccountSignal,
   type NotificationItem,
+  type RecoveringAccount,
   type SalaryReadySignal,
 } from "@/lib/notifications";
 
@@ -733,28 +733,22 @@ export async function getNotifications(): Promise<NotificationItem[]> {
     prisma.notificationAck.findMany({ where: { userId: user.id }, select: { key: true } }),
   ]);
   const ackKeys = new Set(acks.map((a) => a.key));
-  const today = startOfDay(new Date());
+  const systemIds = new Set(accounts.filter((a) => a.isSystem).map((a) => a.id));
 
-  const signals: AccountSignal[] = accounts
-    .filter((a) => !a.isSystem)
+  // The projection's own warnings are the authoritative negative/buffer/bounce
+  // set; drop any raised against the auto-managed (system) card liability.
+  const warnings = result.warnings.filter((w) => !systemIds.has(w.accountId));
+
+  // Asset accounts underwater today but projected to climb back to ≥ 0.
+  const recovering: RecoveringAccount[] = accounts
+    .filter((a) => !a.isSystem && a.type !== "credit_card" && a.balanceMinor < 0)
     .map((a) => {
-      const stat = result.perAccount[a.id];
-      // For an account that's underwater today, find when it first climbs back.
-      const firstPositiveDate =
-        a.balanceMinor < 0 ? result.days.find((d) => (d.balances[a.id] ?? 0) >= 0)?.date ?? null : null;
-      return {
-        id: a.id,
-        name: a.name,
-        type: a.type,
-        currency: a.currency,
-        balanceMinor: a.balanceMinor,
-        creditLimitMinor: a.creditLimitMinor,
-        firstNegativeDate: stat?.firstNegativeDate ?? null,
-        firstPositiveDate,
-        minBalanceMinor: stat?.minBalanceMinor ?? a.balanceMinor,
-        minBalanceDate: stat?.minBalanceDate ?? today,
-      };
-    });
+      const day = result.days.find((d) => (d.balances[a.id] ?? 0) >= 0);
+      return day
+        ? { id: a.id, name: a.name, currency: a.currency, balanceMinor: a.balanceMinor, firstPositiveDate: day.date }
+        : null;
+    })
+    .filter((x): x is RecoveringAccount => x != null);
 
   const salaryReady: SalaryReadySignal[] = schedule
     .filter((o) => o.debitable)
@@ -767,7 +761,7 @@ export async function getNotifications(): Promise<NotificationItem[]> {
       date: o.date,
     }));
 
-  return buildNotifications({ accounts: signals, salaryReady }).filter((n) => !ackKeys.has(n.key));
+  return buildNotifications({ warnings, recovering, salaryReady }).filter((n) => !ackKeys.has(n.key));
 }
 
 // ── PDCs ──────────────────────────────────────────────────────────────────────

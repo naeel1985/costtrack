@@ -7,7 +7,8 @@ import {
   BadgeDollarSign,
   Check,
   CheckCheck,
-  CreditCard,
+  AlertTriangle,
+  ReceiptText,
   ShieldAlert,
   TrendingUp,
 } from "lucide-react";
@@ -20,8 +21,9 @@ import type { NotificationItem, NotificationSeverity, NotificationType } from "@
 const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
   salary_ready: BadgeDollarSign,
   account_negative: ShieldAlert,
+  account_buffer: AlertTriangle,
   account_positive: TrendingUp,
-  card_over_limit: CreditCard,
+  pdc_bounce: ReceiptText,
 };
 
 const SEVERITY_TONE: Record<NotificationSeverity, string> = {

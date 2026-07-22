@@ -1,22 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { buildNotifications, type AccountSignal, type SalaryReadySignal } from "./notifications";
+import {
+  buildNotifications,
+  type RecoveringAccount,
+  type SalaryReadySignal,
+} from "./notifications";
+import type { ProjectionWarning } from "./projection";
 
 const d = (s: string) => {
   const [y, m, day] = s.split("-").map(Number);
   return new Date(y, m - 1, day);
 };
 
-const asset = (over: Partial<AccountSignal> = {}): AccountSignal => ({
+const warn = (over: Partial<ProjectionWarning> = {}): ProjectionWarning => ({
+  type: "negative",
+  severity: "critical",
+  accountId: "a1",
+  accountName: "Main",
+  date: d("2026-08-10"),
+  message: "Main is projected to go negative",
+  projectedBalanceMinor: -500_00,
+  ...over,
+});
+
+const recovering = (over: Partial<RecoveringAccount> = {}): RecoveringAccount => ({
   id: "a1",
   name: "Main",
-  type: "bank",
   currency: "AED",
-  balanceMinor: 1_000_00,
-  creditLimitMinor: null,
-  firstNegativeDate: null,
-  firstPositiveDate: null,
-  minBalanceMinor: 1_000_00,
-  minBalanceDate: d("2026-07-22"),
+  balanceMinor: -200_00,
+  firstPositiveDate: d("2026-07-25"),
   ...over,
 });
 
@@ -30,26 +41,41 @@ const salary = (over: Partial<SalaryReadySignal> = {}): SalaryReadySignal => ({
   ...over,
 });
 
-describe("buildNotifications — accounts", () => {
-  it("warns when a positive account is projected to go negative", () => {
-    const n = buildNotifications({
-      accounts: [asset({ balanceMinor: 500_00, firstNegativeDate: d("2026-08-10") })],
-      salaryReady: [],
-    });
+describe("buildNotifications — projection warnings", () => {
+  it("maps a negative warning to a critical notification carrying its message", () => {
+    const n = buildNotifications({ warnings: [warn()], recovering: [], salaryReady: [] });
     expect(n).toHaveLength(1);
     expect(n[0].type).toBe("account_negative");
     expect(n[0].severity).toBe("critical");
+    expect(n[0].body).toBe("Main is projected to go negative");
     expect(n[0].key).toContain("account_negative:a1:");
   });
 
-  it("stays quiet for a healthy account", () => {
-    const n = buildNotifications({ accounts: [asset()], salaryReady: [] });
-    expect(n).toHaveLength(0);
+  it("maps buffer and pdc_bounce warnings", () => {
+    const n = buildNotifications({
+      warnings: [
+        warn({ type: "buffer", severity: "warning", message: "Main drops below its safety buffer" }),
+        warn({ type: "pdc_bounce", refId: "pdc9", accountId: "a2", message: "Cheque #004 may bounce" }),
+      ],
+      recovering: [],
+      salaryReady: [],
+    });
+    expect(n.map((x) => x.type)).toContain("account_buffer");
+    const bounce = n.find((x) => x.type === "pdc_bounce")!;
+    expect(bounce.severity).toBe("critical");
+    expect(bounce.key).toBe(`pdc_bounce:pdc9:${String(d("2026-08-10").getTime())}`);
   });
 
-  it("reassures when an overdrawn account is projected to recover", () => {
+  it("empty in → empty out", () => {
+    expect(buildNotifications({ warnings: [], recovering: [], salaryReady: [] })).toEqual([]);
+  });
+});
+
+describe("buildNotifications — recovery replaces the scary warning", () => {
+  it("suppresses a negative/buffer warning for a recovering account and shows recovery instead", () => {
     const n = buildNotifications({
-      accounts: [asset({ balanceMinor: -200_00, firstNegativeDate: d("2026-07-22"), firstPositiveDate: d("2026-07-25") })],
+      warnings: [warn({ date: d("2026-07-22") }), warn({ type: "buffer", severity: "warning" })],
+      recovering: [recovering()],
       salaryReady: [],
     });
     expect(n).toHaveLength(1);
@@ -57,48 +83,19 @@ describe("buildNotifications — accounts", () => {
     expect(n[0].severity).toBe("positive");
   });
 
-  it("flags an overdrawn account with no recovery as critical and undated", () => {
+  it("still surfaces a bounce warning even while an account is recovering", () => {
     const n = buildNotifications({
-      accounts: [asset({ balanceMinor: -200_00, firstNegativeDate: d("2026-07-22"), firstPositiveDate: null })],
+      warnings: [warn({ type: "pdc_bounce", refId: "pdc1", message: "Cheque may bounce" })],
+      recovering: [recovering()],
       salaryReady: [],
     });
-    expect(n[0].type).toBe("account_negative");
-    expect(n[0].key).toBe("account_negative:a1:now");
-    expect(n[0].date).toBeNull();
-  });
-});
-
-describe("buildNotifications — credit cards", () => {
-  const card = (over: Partial<AccountSignal> = {}): AccountSignal =>
-    asset({ id: "c1", name: "Visa", type: "credit_card", balanceMinor: -1_000_00, ...over });
-
-  it("warns only when projected debt exceeds the limit", () => {
-    const over = buildNotifications({
-      accounts: [card({ creditLimitMinor: 5_000_00, minBalanceMinor: -6_000_00, minBalanceDate: d("2026-08-02") })],
-      salaryReady: [],
-    });
-    expect(over).toHaveLength(1);
-    expect(over[0].type).toBe("card_over_limit");
-
-    const under = buildNotifications({
-      accounts: [card({ creditLimitMinor: 5_000_00, minBalanceMinor: -3_000_00 })],
-      salaryReady: [],
-    });
-    expect(under).toHaveLength(0);
-  });
-
-  it("never treats a card's owed balance as 'going negative'", () => {
-    const n = buildNotifications({
-      accounts: [card({ creditLimitMinor: null, firstNegativeDate: d("2026-07-22") })],
-      salaryReady: [],
-    });
-    expect(n).toHaveLength(0);
+    expect(n.map((x) => x.type).sort()).toEqual(["account_positive", "pdc_bounce"]);
   });
 });
 
 describe("buildNotifications — salary + ordering", () => {
   it("emits a salary-ready notification per occurrence", () => {
-    const n = buildNotifications({ accounts: [], salaryReady: [salary()] });
+    const n = buildNotifications({ warnings: [], recovering: [], salaryReady: [salary()] });
     expect(n).toHaveLength(1);
     expect(n[0].type).toBe("salary_ready");
     expect(n[0].key).toContain("salary_ready:sal:");
@@ -106,17 +103,15 @@ describe("buildNotifications — salary + ordering", () => {
 
   it("orders critical before info before positive", () => {
     const n = buildNotifications({
-      accounts: [
-        asset({ id: "pos", balanceMinor: -50_00, firstNegativeDate: d("2026-07-22"), firstPositiveDate: d("2026-07-30") }),
-        asset({ id: "neg", balanceMinor: 100_00, firstNegativeDate: d("2026-08-01") }),
-      ],
+      warnings: [warn({ accountId: "neg", accountName: "Neg" })],
+      recovering: [recovering({ id: "pos", name: "Pos" })],
       salaryReady: [salary()],
     });
     expect(n.map((x) => x.type)).toEqual(["account_negative", "salary_ready", "account_positive"]);
   });
 
   it("produces stable keys for identical inputs", () => {
-    const input = { accounts: [asset({ balanceMinor: 10_00, firstNegativeDate: d("2026-08-10") })], salaryReady: [salary()] };
+    const input = { warnings: [warn()], recovering: [], salaryReady: [salary()] };
     expect(buildNotifications(input).map((x) => x.key)).toEqual(buildNotifications(input).map((x) => x.key));
   });
 });

@@ -17,7 +17,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Money } from "@/components/money";
 import { AddTransactionButton } from "@/components/add-transaction-button";
 import { ProjectionExplorer } from "@/components/dashboard/projection-explorer";
-import { WarningsBanner } from "@/components/dashboard/warnings-banner";
 import { ObligationsList } from "@/components/dashboard/obligations-list";
 import { SalaryPeriodCard } from "@/components/dashboard/salary-period-card";
 import { IncomeVsCostsCard } from "@/components/dashboard/income-vs-costs-card";
@@ -34,7 +33,6 @@ export default async function DashboardPage() {
     savingsRate,
     runway,
     obligations,
-    projection,
     baseCurrency,
     salaryPeriod,
     timeline,
@@ -55,8 +53,6 @@ export default async function DashboardPage() {
         description={format(new Date(), "EEEE, d MMMM yyyy")}
         action={<AddTransactionButton size="sm" />}
       />
-
-      <WarningsBanner warnings={projection.warnings} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard
