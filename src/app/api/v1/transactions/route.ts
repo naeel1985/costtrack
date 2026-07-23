@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server";
-import { apiJson } from "@/server/api-auth";
+import { apiJson, apiMutation } from "@/server/api-auth";
 import { getTransactions, type TransactionFilters } from "@/server/queries";
+import { saveTransactionCore } from "@/server/mutations/transactions";
 import { parseDate, str } from "@/server/api-params";
 
 export const dynamic = "force-dynamic";
@@ -23,4 +24,10 @@ export function GET(req: NextRequest) {
     to: parseDate(sp.get("to")),
   };
   return apiJson(() => getTransactions(filters));
+}
+
+// Create (no id) or update (with id) a transaction.
+// Body: { type, amount, currency?, date, accountId?, transferAccountId?, categoryId?, note?, method?, tags?, id? }
+export function POST(req: NextRequest) {
+  return apiMutation(req, (auth, body) => saveTransactionCore(auth, body));
 }

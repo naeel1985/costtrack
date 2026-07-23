@@ -7,7 +7,11 @@ import { prisma } from "@/lib/db";
 import { toMinor } from "@/lib/money";
 import { expandRecurrence } from "@/lib/projection";
 import { requireUser } from "@/server/auth";
-import { CREDIT_CARD_ACCOUNT_NAME } from "@/lib/domain";
+import {
+  assertOwnsAccounts,
+  assertOwnsCategory,
+  resolveCreditCardAccount,
+} from "@/server/mutations/shared";
 import { decryptPdc, decryptProvision, decryptRecurring, encInt, encNull, encStr } from "@/server/crypto-map";
 import {
   accountSchema,
@@ -21,13 +25,13 @@ import {
   rateSchema,
   recurringSchema,
   settingsSchema,
-  transactionSchema,
 } from "@/lib/schemas";
 import {
   debitRecurringOccurrenceCore,
   undoRecurringOccurrenceCore,
 } from "@/server/mutations/income";
 import { acknowledgeNotificationsCore } from "@/server/mutations/notifications";
+import { deleteTransactionCore, saveTransactionCore } from "@/server/mutations/transactions";
 
 export type ActionResult = { ok: true; id?: string } | { ok: false; error: string };
 
@@ -45,57 +49,8 @@ function revalidateAll() {
   }
 }
 
-/** Throw unless every provided account id belongs to the user. */
-async function assertOwnsAccounts(userId: string, ids: (string | null | undefined)[]) {
-  const wanted = [...new Set(ids.filter((x): x is string => !!x))];
-  if (wanted.length === 0) return;
-  const count = await prisma.account.count({ where: { userId, id: { in: wanted } } });
-  if (count !== wanted.length) throw new Error("Account not found");
-}
-
-async function assertOwnsCategory(userId: string, categoryId: string | null | undefined) {
-  if (!categoryId) return;
-  const found = await prisma.category.count({ where: { userId, id: categoryId } });
-  if (!found) throw new Error("Category not found");
-}
-
-/**
- * Resolve which credit card a cost/payment belongs to. Users can keep several
- * cards (each an Account of type `credit_card`, whose negative balance is the
- * amount owed). If they haven't set one up yet we create a default on first
- * use, so the zero-config path still works.
- */
-async function resolveCreditCardAccount(
-  userId: string,
-  dek: Buffer,
-  cardId?: string | null,
-): Promise<string> {
-  if (cardId) {
-    const chosen = await prisma.account.findFirst({
-      where: { id: cardId, userId, type: "credit_card" },
-    });
-    if (!chosen) throw new Error("Credit card not found");
-    return chosen.id;
-  }
-  const existing = await prisma.account.findFirst({
-    where: { userId, type: "credit_card", isArchived: false },
-    orderBy: [{ isSystem: "desc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
-  });
-  if (existing) return existing.id;
-  const created = await prisma.account.create({
-    data: {
-      userId,
-      nameEnc: encStr(CREDIT_CARD_ACCOUNT_NAME, dek),
-      type: "credit_card",
-      currency: "AED",
-      openingBalanceEnc: encInt(0, dek),
-      safetyBufferEnc: encInt(0, dek),
-      color: "#7c3aed",
-      isSystem: true,
-    },
-  });
-  return created.id;
-}
+// assertOwnsAccounts / assertOwnsCategory / resolveCreditCardAccount live in
+// @/server/mutations/shared (imported above) so the mobile API cores reuse them.
 
 function computeNextRunDate(rule: {
   frequency: string;
@@ -226,44 +181,10 @@ export async function deleteCategory(id: string): Promise<ActionResult> {
 
 export async function saveTransaction(input: unknown): Promise<ActionResult> {
   try {
-    const { user, dek } = await requireUser();
-    const data = transactionSchema.parse(input);
-
-    // Method only applies to expenses. A credit-card cost posts to the chosen
-    // card's liability account (or a default created on demand); everything
-    // else posts to the account the user picked.
-    const method = data.type === "expense" ? data.method : "account";
-    const accountId =
-      data.type === "expense" && method === "credit_card"
-        ? await resolveCreditCardAccount(user.id, dek, data.accountId)
-        : data.accountId ?? null;
-    if (!accountId) return { ok: false, error: "Choose an account" };
-
-    await assertOwnsAccounts(user.id, [accountId, data.transferAccountId]);
-    await assertOwnsCategory(user.id, data.type === "transfer" ? null : data.categoryId);
-
-    const payload = {
-      type: data.type,
-      method,
-      amountEnc: encInt(toMinor(data.amount, data.currency), dek),
-      currency: data.currency,
-      date: data.date,
-      accountId,
-      transferAccountId: data.type === "transfer" ? data.transferAccountId || null : null,
-      categoryId: data.type === "transfer" ? null : data.categoryId || null,
-      noteEnc: encNull(data.note, dek),
-      tagsEnc: encStr(JSON.stringify(data.tags ?? []), dek),
-    };
-    let id: string;
-    if (data.id) {
-      const owned = await prisma.transaction.findFirst({ where: { id: data.id, userId: user.id } });
-      if (!owned) return { ok: false, error: "Transaction not found" };
-      id = (await prisma.transaction.update({ where: { id: data.id }, data: payload })).id;
-    } else {
-      id = (await prisma.transaction.create({ data: { ...payload, userId: user.id } })).id;
-    }
-    revalidateAll();
-    return { ok: true, id };
+    const auth = await requireUser();
+    const res = await saveTransactionCore(auth, input);
+    if (res.ok) revalidateAll();
+    return res.ok ? { ok: true, id: res.id } : { ok: false, error: res.error };
   } catch (e) {
     return fail(e);
   }
@@ -271,11 +192,10 @@ export async function saveTransaction(input: unknown): Promise<ActionResult> {
 
 export async function deleteTransaction(id: string): Promise<ActionResult> {
   try {
-    const { user } = await requireUser();
-    const res = await prisma.transaction.deleteMany({ where: { id, userId: user.id } });
-    if (res.count === 0) return { ok: false, error: "Transaction not found" };
-    revalidateAll();
-    return { ok: true };
+    const auth = await requireUser();
+    const res = await deleteTransactionCore(auth, { id });
+    if (res.ok) revalidateAll();
+    return res.ok ? { ok: true } : { ok: false, error: res.error };
   } catch (e) {
     return fail(e);
   }
