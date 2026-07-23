@@ -14,7 +14,6 @@ import {
 } from "@/server/mutations/shared";
 import { decryptPdc, decryptProvision, decryptRecurring, encInt, encNull, encStr } from "@/server/crypto-map";
 import {
-  accountSchema,
   allocationSchema,
   budgetSchema,
   categorySchema,
@@ -32,6 +31,7 @@ import {
 } from "@/server/mutations/income";
 import { acknowledgeNotificationsCore } from "@/server/mutations/notifications";
 import { deleteTransactionCore, saveTransactionCore } from "@/server/mutations/transactions";
+import { saveAccountCore } from "@/server/mutations/accounts";
 
 export type ActionResult = { ok: true; id?: string } | { ok: false; error: string };
 
@@ -79,35 +79,10 @@ function computeNextRunDate(rule: {
 
 export async function saveAccount(input: unknown): Promise<ActionResult> {
   try {
-    const { user, dek } = await requireUser();
-    const data = accountSchema.parse(input);
-    const payload = {
-      nameEnc: encStr(data.name, dek),
-      type: data.type,
-      currency: data.currency,
-      openingBalanceEnc: encInt(toMinor(data.openingBalance, data.currency), dek),
-      safetyBufferEnc: encInt(toMinor(data.safetyBuffer, data.currency), dek),
-      // Only cards carry a limit; clear it if the type changes away.
-      creditLimitEnc:
-        data.type === "credit_card" && data.creditLimit != null
-          ? encInt(toMinor(data.creditLimit, data.currency), dek)
-          : null,
-      color: data.color,
-      // Only cards carry a due day; clear it if the type changes away.
-      dueDay: data.type === "credit_card" ? data.dueDay ?? null : null,
-    };
-    let id: string;
-    if (data.id) {
-      const owned = await prisma.account.findFirst({ where: { id: data.id, userId: user.id } });
-      if (!owned) return { ok: false, error: "Account not found" };
-      const row = await prisma.account.update({ where: { id: data.id }, data: payload });
-      id = row.id;
-    } else {
-      const row = await prisma.account.create({ data: { ...payload, userId: user.id } });
-      id = row.id;
-    }
-    revalidateAll();
-    return { ok: true, id };
+    const auth = await requireUser();
+    const res = await saveAccountCore(auth, input);
+    if (res.ok) revalidateAll();
+    return res.ok ? { ok: true, id: res.id } : { ok: false, error: res.error };
   } catch (e) {
     return fail(e);
   }

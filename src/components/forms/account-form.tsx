@@ -29,6 +29,8 @@ interface FormValues {
   color: string;
   dueDay: string;
   creditLimit: string;
+  bankName: string;
+  cardLast4: string;
 }
 
 export interface AccountInitial {
@@ -41,6 +43,8 @@ export interface AccountInitial {
   color?: string;
   dueDay?: number | null;
   creditLimitMinor?: number | null;
+  bankName?: string | null;
+  cardLast4?: string | null;
 }
 
 export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onDone?: () => void }) {
@@ -61,6 +65,8 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
       color: initial?.color ?? COLORS[0],
       dueDay: initial?.dueDay != null ? String(initial.dueDay) : "",
       creditLimit: initial?.creditLimitMinor != null ? String(initial.creditLimitMinor / 100) : "",
+      bankName: initial?.bankName ?? "",
+      cardLast4: initial?.cardLast4 ?? "",
     },
   });
   const color = watch("color");
@@ -165,6 +171,26 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
           A day past the month&apos;s length (e.g. 31) falls on the last day instead.
         </p>
       )}
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Issuing bank" hint="optional">
+          <Input placeholder="e.g. Emirates NBD" {...register("bankName")} />
+        </Field>
+        <Field
+          label="Card last 4"
+          hint="optional"
+          error={formState.errors.cardLast4?.message}
+        >
+          <Input
+            inputMode="numeric"
+            maxLength={4}
+            placeholder="1234"
+            className="tabular"
+            {...register("cardLast4", {
+              pattern: { value: /^(\d{4})?$/, message: "Enter the last 4 digits" },
+            })}
+          />
+        </Field>
+      </div>
       <Field label="Colour">
         <div className="flex flex-wrap gap-2">
           {COLORS.map((c) => (

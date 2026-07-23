@@ -21,6 +21,8 @@ export default async function AccountsPage() {
     isArchived: a.isArchived,
     dueDay: a.dueDay,
     creditLimitMinor: a.creditLimitMinor,
+    bankName: a.bankName,
+    cardLast4: a.cardLast4,
   }));
 
   return <AccountsView accounts={rows} baseCurrency={settings.baseCurrency} />;

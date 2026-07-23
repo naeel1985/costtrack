@@ -146,6 +146,10 @@ model Account {
   // Credit cards only: the borrowing limit (encrypted minor units). Available
   // credit = limit − amount owed. Null for non-card accounts.
   creditLimitEnc    String?
+  // Cards only (optional): the issuing bank's name and the card's last 4 digits,
+  // both encrypted. Purely descriptive — they help the user tell cards apart.
+  bankNameEnc       String?
+  cardLast4Enc      String?
   color             String   @default("#64748b")
   isArchived        Boolean  @default(false)
   // Auto-managed accounts the user never creates directly — currently the

@@ -41,6 +41,9 @@ export interface AccountRow {
   dueDay?: number | null;
   /** Credit cards only: the borrowing limit. */
   creditLimitMinor?: number | null;
+  /** Optional: issuing bank + last 4 digits. */
+  bankName?: string | null;
+  cardLast4?: string | null;
   color: string;
   isArchived: boolean;
 }
@@ -107,6 +110,11 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
                     <div className="text-xs text-muted-foreground">
                       {ACCOUNT_TYPE_LABELS[a.type as AccountType] ?? a.type} · {a.currency}
                     </div>
+                    {(a.bankName || a.cardLast4) && (
+                      <div className="text-xs text-muted-foreground">
+                        {[a.bankName, a.cardLast4 ? `•••• ${a.cardLast4}` : null].filter(Boolean).join(" · ")}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <DropdownMenu>
@@ -128,6 +136,8 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
                           color: a.color,
                           dueDay: a.dueDay,
                           creditLimitMinor: a.creditLimitMinor,
+                          bankName: a.bankName,
+                          cardLast4: a.cardLast4,
                         });
                         setOpen(true);
                       }}

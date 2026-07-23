@@ -37,6 +37,11 @@ export const accountSchema = z
     creditLimit: z
       .union([z.coerce.number().finite().min(0), z.null()])
       .optional(),
+    // Optional descriptive fields for cards: issuing bank + last 4 digits.
+    bankName: z.string().max(80).optional().nullable(),
+    cardLast4: z
+      .union([z.string().regex(/^\d{4}$/, "Enter exactly 4 digits"), z.literal(""), z.null()])
+      .optional(),
   })
   .refine((d) => d.type !== "credit_card" || d.dueDay != null, {
     message: "Choose the day of the month the card is due",
