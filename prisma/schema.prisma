@@ -94,6 +94,11 @@ model Session {
   ip         String?
   userAgent  String?
   expiresAt  DateTime
+  // Sliding inactivity window in seconds. When set (mobile/bearer sessions),
+  // the session also expires after this long without a request; `lastUsedAt`
+  // is bumped on each authenticated request. Null (web cookie sessions) = no
+  // idle timeout, only the absolute `expiresAt`.
+  idleTimeoutSec Int?
   createdAt  DateTime @default(now())
   lastUsedAt DateTime @default(now())
 

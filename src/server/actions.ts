@@ -1,15 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { startOfDay } from "date-fns";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { toMinor } from "@/lib/money";
-import { expandRecurrence } from "@/lib/projection";
 import { requireUser } from "@/server/auth";
 import {
   assertOwnsAccounts,
   assertOwnsCategory,
+  computeNextRunDate,
   resolveCreditCardAccount,
 } from "@/server/mutations/shared";
 import { decryptPdc, decryptProvision, decryptRecurring, encInt, encNull, encStr } from "@/server/crypto-map";
@@ -22,7 +21,6 @@ import {
   pdcStatusSchema,
   provisionSchema,
   rateSchema,
-  recurringSchema,
   settingsSchema,
 } from "@/lib/schemas";
 import {
@@ -32,6 +30,7 @@ import {
 import { acknowledgeNotificationsCore } from "@/server/mutations/notifications";
 import { deleteTransactionCore, saveTransactionCore } from "@/server/mutations/transactions";
 import { saveAccountCore } from "@/server/mutations/accounts";
+import { saveRecurringCore } from "@/server/mutations/recurring";
 
 export type ActionResult = { ok: true; id?: string } | { ok: false; error: string };
 
@@ -52,28 +51,9 @@ function revalidateAll() {
 // assertOwnsAccounts / assertOwnsCategory / resolveCreditCardAccount live in
 // @/server/mutations/shared (imported above) so the mobile API cores reuse them.
 
-function computeNextRunDate(rule: {
-  frequency: string;
-  interval: number;
-  startDate: Date;
-  endDate?: Date | null;
-  occurrenceCount?: number | null;
-}): Date {
-  const today = startOfDay(new Date());
-  const horizon = new Date(today.getFullYear() + 5, today.getMonth(), today.getDate());
-  const occurrences = expandRecurrence(
-    {
-      frequency: rule.frequency as never,
-      interval: rule.interval,
-      startDate: rule.startDate,
-      endDate: rule.endDate ?? null,
-      occurrenceCount: rule.occurrenceCount ?? null,
-    },
-    today,
-    horizon,
-  );
-  return occurrences[0] ?? rule.startDate;
-}
+// computeNextRunDate now lives in @/server/mutations/shared (imported above) so
+// the recurring mutation core can reuse it without importing this "use server"
+// module.
 
 // ── Accounts ──────────────────────────────────────────────────────────────────
 
@@ -223,42 +203,10 @@ export async function recordCreditCardPayment(input: unknown): Promise<ActionRes
 
 export async function saveRecurring(input: unknown): Promise<ActionResult> {
   try {
-    const { user, dek } = await requireUser();
-    const data = recurringSchema.parse(input);
-    await assertOwnsAccounts(user.id, [data.accountId]);
-    await assertOwnsCategory(user.id, data.categoryId);
-
-    const base = {
-      nameEnc: encStr(data.name, dek),
-      type: data.type,
-      frequency: data.frequency,
-      interval: data.interval,
-      startDate: data.startDate,
-      endDate: data.endDate || null,
-      occurrenceCount: data.occurrenceCount || null,
-      amountEnc: encInt(toMinor(data.amount, data.currency), dek),
-      currency: data.currency,
-      accountId: data.accountId,
-      categoryId: data.categoryId || null,
-      noteEnc: encNull(data.note, dek),
-    };
-    const nextRunDate = computeNextRunDate({
-      frequency: data.frequency,
-      interval: data.interval,
-      startDate: data.startDate,
-      endDate: data.endDate,
-      occurrenceCount: data.occurrenceCount,
-    });
-    let id: string;
-    if (data.id) {
-      const owned = await prisma.recurringRule.findFirst({ where: { id: data.id, userId: user.id } });
-      if (!owned) return { ok: false, error: "Rule not found" };
-      id = (await prisma.recurringRule.update({ where: { id: data.id }, data: { ...base, nextRunDate } })).id;
-    } else {
-      id = (await prisma.recurringRule.create({ data: { ...base, nextRunDate, userId: user.id } })).id;
-    }
-    revalidateAll();
-    return { ok: true, id };
+    const auth = await requireUser();
+    const res = await saveRecurringCore(auth, input);
+    if (res.ok) revalidateAll();
+    return res.ok ? { ok: true, id: res.id } : { ok: false, error: res.error };
   } catch (e) {
     return fail(e);
   }

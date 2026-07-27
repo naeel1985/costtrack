@@ -123,7 +123,10 @@ export function AppShell({
           </div>
         </header>
 
-        <main className="flex-1 px-4 py-5 pb-24 md:px-8 md:py-7 md:pb-10">{children}</main>
+        {/* Extra bottom padding clears the fixed mobile bottom-nav AND the
+            floating assistant launcher, so page controls at the very bottom
+            (e.g. the recurring-costs pager) are never hidden underneath it. */}
+        <main className="flex-1 px-4 py-5 pb-36 md:px-8 md:py-7 md:pb-24">{children}</main>
       </div>
 
       {/* Mobile bottom nav */}

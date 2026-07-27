@@ -20,7 +20,11 @@ export async function POST(req: NextRequest) {
 
   // Same session row the web login creates — just returned as a token instead of
   // planted in a cookie. The DEK is sealed with SERVER_KEY inside the row.
-  const { token, expiresAt } = await createSessionToken(outcome.userId, outcome.dek);
+  // Mobile sessions auto-expire after 15 min of inactivity (each request slides
+  // the window); the 7-day absolute expiry still caps the maximum lifetime.
+  const { token, expiresAt } = await createSessionToken(outcome.userId, outcome.dek, {
+    idleTimeoutSec: 15 * 60,
+  });
   return NextResponse.json({
     token,
     expiresAt: expiresAt.toISOString(),

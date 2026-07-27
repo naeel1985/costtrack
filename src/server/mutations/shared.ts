@@ -1,6 +1,8 @@
 import "server-only";
+import { startOfDay } from "date-fns";
 import { prisma } from "@/lib/db";
 import { CREDIT_CARD_ACCOUNT_NAME } from "@/lib/domain";
+import { expandRecurrence } from "@/lib/projection";
 import { encInt, encStr } from "@/server/crypto-map";
 
 // Ownership/resolution helpers shared by the web server actions and the mobile
@@ -57,4 +59,32 @@ export async function resolveCreditCardAccount(
     },
   });
   return created.id;
+}
+
+/**
+ * The next date a recurring rule should fire on or after today, given its
+ * schedule. Falls back to the start date if the series has no future
+ * occurrence. Shared by the web actions and the mobile API core.
+ */
+export function computeNextRunDate(rule: {
+  frequency: string;
+  interval: number;
+  startDate: Date;
+  endDate?: Date | null;
+  occurrenceCount?: number | null;
+}): Date {
+  const today = startOfDay(new Date());
+  const horizon = new Date(today.getFullYear() + 5, today.getMonth(), today.getDate());
+  const occurrences = expandRecurrence(
+    {
+      frequency: rule.frequency as never,
+      interval: rule.interval,
+      startDate: rule.startDate,
+      endDate: rule.endDate ?? null,
+      occurrenceCount: rule.occurrenceCount ?? null,
+    },
+    today,
+    horizon,
+  );
+  return occurrences[0] ?? rule.startDate;
 }

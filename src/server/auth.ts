@@ -12,6 +12,9 @@ import {
 
 const COOKIE = "cf_session";
 const SESSION_DAYS = 7;
+// Don't write `lastUsedAt` on every single request — only once it's this stale.
+// Keeps the sliding window accurate to the minute without a write per read.
+const SLIDE_THROTTLE_MS = 60_000;
 
 export interface SessionUser {
   id: string;
@@ -44,6 +47,7 @@ async function requestMeta() {
 export async function createSessionToken(
   userId: string,
   dek: Buffer,
+  opts?: { idleTimeoutSec?: number },
 ): Promise<{ token: string; expiresAt: Date }> {
   const token = generateToken();
   const { ip, userAgent } = await requestMeta();
@@ -56,6 +60,7 @@ export async function createSessionToken(
       ip,
       userAgent,
       expiresAt,
+      idleTimeoutSec: opts?.idleTimeoutSec ?? null,
     },
   });
   return { token, expiresAt };
@@ -113,7 +118,24 @@ export const getAuth = cache(async (): Promise<AuthContext | null> => {
     where: { tokenHash: hashToken(token) },
     include: { user: true },
   });
-  if (!session || session.expiresAt < new Date() || !session.user.isActive) return null;
+  const now = new Date();
+  if (!session || session.expiresAt < now || !session.user.isActive) return null;
+
+  // Sliding inactivity timeout (mobile/bearer sessions). If the last request was
+  // longer ago than the window, the session is dead — delete it and reject. Any
+  // request inside the window "slides" it forward by bumping `lastUsedAt`.
+  if (session.idleTimeoutSec != null) {
+    const idleMs = now.getTime() - session.lastUsedAt.getTime();
+    if (idleMs > session.idleTimeoutSec * 1000) {
+      await prisma.session.deleteMany({ where: { id: session.id } }).catch(() => {});
+      return null;
+    }
+    if (idleMs > SLIDE_THROTTLE_MS) {
+      await prisma.session
+        .update({ where: { id: session.id }, data: { lastUsedAt: now } })
+        .catch(() => {});
+    }
+  }
 
   let dek: Buffer;
   try {
