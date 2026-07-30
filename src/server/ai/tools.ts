@@ -59,7 +59,7 @@ export const TOOL_SCHEMAS = [
     parameters: {
       type: "object",
       properties: {
-        daysAhead: { type: "integer", description: "Horizon in days (default 60, max 365)." },
+        daysAhead: { type: "integer", description: "Horizon in days (default 30, max 365)." },
       },
       additionalProperties: false,
     },
@@ -175,7 +175,7 @@ async function getCreditCards(ctx: ToolContext) {
 }
 
 async function listDuePayments(ctx: ToolContext, args: { daysAhead?: number }) {
-  const daysAhead = Math.min(365, Math.max(1, Math.trunc(args.daysAhead ?? 60)));
+  const daysAhead = Math.min(365, Math.max(1, Math.trunc(args.daysAhead ?? 30)));
   const today = startOfDay(new Date());
   const end = endOfDay(addDays(today, daysAhead));
 
