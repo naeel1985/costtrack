@@ -36,7 +36,7 @@ export async function createToolContext(userId: string, dek: Buffer): Promise<To
 const money = (minor: number) => Math.round(minor) / 100;
 const iso = (d: Date) => format(d, "yyyy-MM-dd");
 
-const ACCOUNT_TYPE = { cash: "cash", bank: "bank", credit_card: "credit card", wallet: "wallet" } as const;
+const ACCOUNT_TYPE = { cash: "cash", bank: "debit card", credit_card: "credit card", wallet: "wallet" } as const;
 
 /** JSON-schema function definitions advertised to the model (and to MCP). */
 export const TOOL_SCHEMAS = [

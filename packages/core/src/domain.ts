@@ -7,7 +7,7 @@ export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   cash: "Cash",
-  bank: "Bank",
+  bank: "Debit Card",
   credit_card: "Credit card",
   wallet: "Wallet",
 };

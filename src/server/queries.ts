@@ -491,7 +491,7 @@ async function loadForwardView(
     cardBillEvents.push(...bills);
   }
 
-  const salaryPeriod = computeSalaryPeriod({ today, savingsMinor, salaryEvents, costEvents });
+  const salaryPeriod = computeSalaryPeriod({ today, savingsMinor, salaryEvents, costEvents, otherIncomeEvents });
   const timeline = buildCashflowTimeline({
     today,
     savingsMinor,

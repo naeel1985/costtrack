@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { Landmark } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -13,8 +14,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Field } from "./field";
+import { BankPickerDialog } from "./bank-picker-dialog";
 import { saveAccount } from "@/server/actions";
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABELS, type AccountType } from "@/lib/domain";
+import { findBank } from "@/lib/banks";
 import { CURRENCIES } from "@/lib/money";
 import { cn } from "@/lib/utils";
 
@@ -49,11 +52,13 @@ export interface AccountInitial {
 
 export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onDone?: () => void }) {
   const [pending, startTransition] = React.useTransition();
+  const [bankPickerOpen, setBankPickerOpen] = React.useState(false);
   const {
     register,
     handleSubmit,
     watch,
     setValue,
+    getValues,
     formState,
   } = useForm<FormValues>({
     defaultValues: {
@@ -71,7 +76,12 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
   });
   const color = watch("color");
   const type = watch("type");
+  const bankName = watch("bankName");
   const isCard = type === "credit_card";
+  // Both debit-card ("bank") and credit-card accounts must carry an issuing
+  // bank; cash and wallet accounts don't have one.
+  const needsBank = type === "bank" || type === "credit_card";
+  const selectedBank = bankName ? findBank(bankName) : undefined;
 
   function submit(v: FormValues) {
     startTransition(async () => {
@@ -166,15 +176,50 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
       </div>
       {isCard && (
         <p className="-mt-2 text-xs text-muted-foreground">
-          A credit card is a loan: spend up to the limit, then repay from cash/bank by the due day.
+          A credit card is a loan: spend up to the limit, then repay from cash/debit card by the due day.
           Costs charged between two due dates form one bill — that is when it hits your free savings.
           A day past the month&apos;s length (e.g. 31) falls on the last day instead.
         </p>
       )}
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Issuing bank" hint="optional">
-          <Input placeholder="e.g. Emirates NBD" {...register("bankName")} />
-        </Field>
+      {needsBank && (
+        <>
+          <input
+            type="hidden"
+            {...register("bankName", {
+              validate: (v) => {
+                const t = getValues("type");
+                if ((t === "bank" || t === "credit_card") && !v) return "Select the issuing bank";
+                return true;
+              },
+            })}
+          />
+          <Field label="Issuing bank" error={formState.errors.bankName?.message}>
+            <button
+              type="button"
+              onClick={() => setBankPickerOpen(true)}
+              className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm transition-colors hover:bg-accent"
+            >
+              <Landmark className="h-4 w-4 shrink-0 text-muted-foreground" />
+              {selectedBank ? (
+                <span className="flex-1 truncate text-left">
+                  {selectedBank.name}
+                  {selectedBank.abbreviation && (
+                    <span className="text-muted-foreground"> ({selectedBank.abbreviation})</span>
+                  )}
+                </span>
+              ) : (
+                <span className="flex-1 text-left text-muted-foreground">Select bank…</span>
+              )}
+            </button>
+          </Field>
+          <BankPickerDialog
+            open={bankPickerOpen}
+            onOpenChange={setBankPickerOpen}
+            onSelect={(name) => setValue("bankName", name, { shouldValidate: true })}
+          />
+        </>
+      )}
+      {needsBank && (
         <Field
           label="Card last 4"
           hint="optional"
@@ -190,7 +235,7 @@ export function AccountForm({ initial, onDone }: { initial?: AccountInitial; onD
             })}
           />
         </Field>
-      </div>
+      )}
       <Field label="Colour">
         <div className="flex flex-wrap gap-2">
           {COLORS.map((c) => (

@@ -300,7 +300,7 @@ export function TransactionForm({
 
       {isCreditCard && (
         <p className="-mt-2 text-xs text-muted-foreground">
-          Adds to the card&apos;s balance owed — repaid from cash/bank on the card&apos;s due date,
+          Adds to the card&apos;s balance owed — repaid from cash/debit card on the card&apos;s due date,
           which is when it reaches your free savings.
         </p>
       )}

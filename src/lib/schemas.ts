@@ -8,6 +8,7 @@ import {
   RECURRENCE_FREQUENCIES,
   TRANSACTION_TYPES,
 } from "./domain";
+import { isKnownBank } from "./banks";
 
 // All forms submit major-unit amounts as strings/numbers; we coerce and the
 // server action converts to minor units. Amounts are validated as finite &
@@ -37,7 +38,9 @@ export const accountSchema = z
     creditLimit: z
       .union([z.coerce.number().finite().min(0), z.null()])
       .optional(),
-    // Optional descriptive fields for cards: issuing bank + last 4 digits.
+    // Issuing bank: mandatory for debit-card ("bank") and credit-card
+    // accounts, picked from the known UAE bank list; not applicable to
+    // cash/wallet accounts. Card last 4 stays optional descriptive info.
     bankName: z.string().max(80).optional().nullable(),
     cardLast4: z
       .union([z.string().regex(/^\d{4}$/, "Enter exactly 4 digits"), z.literal(""), z.null()])
@@ -46,6 +49,14 @@ export const accountSchema = z
   .refine((d) => d.type !== "credit_card" || d.dueDay != null, {
     message: "Choose the day of the month the card is due",
     path: ["dueDay"],
+  })
+  .refine((d) => (d.type !== "bank" && d.type !== "credit_card") || !!d.bankName, {
+    message: "Select the issuing bank",
+    path: ["bankName"],
+  })
+  .refine((d) => !d.bankName || isKnownBank(d.bankName), {
+    message: "Choose a bank from the list",
+    path: ["bankName"],
   });
 export type AccountInput = z.infer<typeof accountSchema>;
 

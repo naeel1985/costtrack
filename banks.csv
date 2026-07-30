@@ -1,0 +1,50 @@
+bank,abb,type,headquarter
+Abu Dhabi Commercial Bank,ADCB,National,Abu Dhabi
+Abu Dhabi Islamic Bank,ADIB,National (Islamic),Abu Dhabi
+Ajman Bank,,National (Islamic),Ajman
+Al Hilal Bank,,National (Islamic) - part of ADCB group,Abu Dhabi
+Al Maryah Community Bank,Mbank,National,Abu Dhabi
+Bank of Sharjah,BOS,National,Sharjah
+Commercial Bank International,CBI,National,Dubai
+Commercial Bank of Dubai,CBD,National,Dubai
+Dubai Islamic Bank,DIB,National (Islamic),Dubai
+Emirates Investment Bank,EIB,National,Dubai
+Emirates Islamic,EI,National (Islamic),Dubai
+Emirates NBD,ENBD,National,Dubai
+First Abu Dhabi Bank,FAB,National,Abu Dhabi
+Invest Bank,,National,Sharjah
+Mashreq,,National,Dubai
+National Bank of Fujairah,NBF,National,Fujairah
+National Bank of Umm Al-Qaiwain,NBQ,National,Umm Al Quwain
+RAKBANK (National Bank of Ras Al Khaimah),RAKBANK,National,Ras Al Khaimah
+Ruya Community Islamic Bank,,National (Islamic),Ajman
+Sharjah Islamic Bank,SIB,National (Islamic),Sharjah
+United Arab Bank,UAB,National,Sharjah
+Wio Bank,,National (Digital),Abu Dhabi
+Zand Bank,,National (Digital),Dubai
+National Bank of Bahrain,NBB,Foreign,Bahrain (branch in Abu Dhabi)
+Gulf International Bank,GIB,Foreign,Bahrain (branch in Abu Dhabi)
+Janata Bank Limited,,Foreign,Bangladesh
+Bank of China Limited,BOC,Foreign,China
+Agricultural Bank of China Ltd.,ABC,Foreign,China
+Banque Misr,,Foreign,Egypt
+Arab African International Bank,AAIB,Foreign,Egypt
+Credit Agricole,,Foreign,France
+BNP Paribas,,Foreign,France
+Banque Banorient France,,Foreign,France
+Habib Bank AG Zurich,,Foreign,Switzerland
+Standard Chartered Bank,SCB,Foreign,United Kingdom
+HSBC Bank Middle East,HSBC,Foreign,United Kingdom
+Citibank,,Foreign,United States
+Barclays Bank,,Foreign,United Kingdom
+Deutsche Bank,,Foreign,Germany
+State Bank of India,SBI,Foreign,India
+Bank of Baroda,,Foreign,India
+ICICI Bank,,Foreign,India
+Habib Bank Limited,HBL,Foreign,Pakistan
+United Bank Limited,UBL,Foreign,Pakistan
+National Bank of Kuwait,NBK,Foreign,Kuwait
+Doha Bank,,Foreign,Qatar
+Arab Bank,,Foreign,Jordan
+El Nilein Bank,,Foreign (Islamic),Sudan
+BOK International Bank,BOK,Foreign (Islamic),Iraq

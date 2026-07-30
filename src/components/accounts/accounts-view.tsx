@@ -69,7 +69,7 @@ export function AccountsView({ accounts, baseCurrency }: { accounts: AccountRow[
     <div className="space-y-5">
       <PageHeader
         title="Accounts"
-        description="Cash, bank, cards and wallets. Balances are computed from your ledger."
+        description="Cash, debit cards, credit cards and wallets. Balances are computed from your ledger."
         action={
           <div className="flex gap-2">
             <AddTransactionButton txType="transfer" label="Transfer" variant="outline" size="sm" />

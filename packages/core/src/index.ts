@@ -6,6 +6,7 @@
 
 export * from "./money";
 export * from "./domain";
+export * from "./banks";
 export * from "./initials";
 export * from "./card-cycle";
 export * from "./salary-period";
