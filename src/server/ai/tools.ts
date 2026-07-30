@@ -59,7 +59,7 @@ export const TOOL_SCHEMAS = [
     parameters: {
       type: "object",
       properties: {
-        daysAhead: { type: "integer", description: "Horizon in days (default 30, max 365)." },
+        daysAhead: { type: "integer", description: "Horizon in days (default and max 30 — committed costs are capped at the coming 30 days)." },
       },
       additionalProperties: false,
     },
@@ -175,7 +175,9 @@ async function getCreditCards(ctx: ToolContext) {
 }
 
 async function listDuePayments(ctx: ToolContext, args: { daysAhead?: number }) {
-  const daysAhead = Math.min(365, Math.max(1, Math.trunc(args.daysAhead ?? 30)));
+  // Hard-capped at 30 — the model cannot widen this by passing a larger
+  // daysAhead itself; committed costs are never reported past 30 days out.
+  const daysAhead = Math.min(30, Math.max(1, Math.trunc(args.daysAhead ?? 30)));
   const today = startOfDay(new Date());
   const end = endOfDay(addDays(today, daysAhead));
 
