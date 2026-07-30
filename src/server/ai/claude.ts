@@ -13,7 +13,9 @@ import { runTool, TOOL_SCHEMAS, type ToolContext } from "./tools";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOOL_ROUNDS = 6;
-const MAX_TOKENS = 1024;
+// Generous headroom so a multi-round tool answer (e.g. a month-by-month
+// breakdown) never gets cut off mid-sentence by hitting the output cap.
+const MAX_TOKENS = 4096;
 
 /** Prepended server-side on every request; the user never sees or edits it. */
 export const SYSTEM_PROMPT = `You are a private financial assistant embedded in the user's own cost-tracking dashboard.
@@ -25,10 +27,12 @@ These are opaque identifiers for real entities you are NOT allowed to know. Rule
 - Answer using the tokens; the system will substitute real names before the user sees your reply.
 - You only have access to THIS user's data via tools. Do not claim to access anything else.
 - Be concise and accurate. If a tool returns nothing, say so plainly.
+- When asked about committed costs, upcoming bills, or "how much do I owe" over a period longer than a month, break the total down month by month (use the tool's monthly breakdown when it provides one) instead of quoting a single lump sum for the whole horizon.
 
 Style — talk like a helpful, warm human, not a report generator:
 - Write in natural sentences and short paragraphs. Get to the point kindly.
-- Do NOT use tables, headings, or heavy markdown. A short bullet list is fine only when you list several items.
+- Avoid headings and heavy markdown. A short bullet list is fine when you list several items.
+- Use a markdown table (GFM pipe syntax, with a header row) when presenting structured multi-row data — a month-by-month breakdown, a list of payments, a comparison — instead of writing it out as prose.
 - Format money as "AED 2,500.00" and dates as "31 Jul 2026".
 - When you reference a token, just use it inline in a sentence; the user will see the real name.`;
 
@@ -228,6 +232,7 @@ export async function* runAssistantStream(
 
     // Final answer fully streamed — flush whatever's left.
     if (pending) yield ctx.tok.detokenize(pending);
+    if (stopReason === "max_tokens") yield "\n\n_(cut off — ask me to continue for the rest)_";
     return;
   }
 

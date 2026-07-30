@@ -55,7 +55,7 @@ export const TOOL_SCHEMAS = [
   {
     name: "list_due_payments",
     description:
-      "Upcoming dated obligations within a horizon: credit-card statement payments, issued cheques, provisions due and recurring costs. Use this to answer when a payment is due.",
+      "Upcoming dated obligations within a horizon: credit-card statement payments, issued cheques, provisions due and recurring costs. Use this to answer when a payment is due. Returns both the raw `payments` list and a `byMonth` breakdown (month, total, currency) — when the horizon spans more than one month, report totals per month from `byMonth` rather than a single lump sum.",
     parameters: {
       type: "object",
       properties: {
@@ -272,7 +272,17 @@ async function listDuePayments(ctx: ToolContext, args: { daysAhead?: number }) {
   }
 
   payments.sort((a, b) => a.date.localeCompare(b.date));
-  return { horizonDays: daysAhead, payments };
+
+  const byMonthMap = new Map<string, { month: string; total: number; currency: string }>();
+  for (const p of payments) {
+    const month = p.date.slice(0, 7); // yyyy-MM
+    const existing = byMonthMap.get(month);
+    if (existing) existing.total += p.amount;
+    else byMonthMap.set(month, { month, total: p.amount, currency: p.currency });
+  }
+  const byMonth = [...byMonthMap.values()].sort((a, b) => a.month.localeCompare(b.month));
+
+  return { horizonDays: daysAhead, payments, byMonth };
 }
 
 async function spendingSummary(ctx: ToolContext, args: { months?: number }) {

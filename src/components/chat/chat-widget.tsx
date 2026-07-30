@@ -135,8 +135,8 @@ export function ChatWidget() {
       {/* Chat panel */}
       <div
         className={cn(
-          "fixed bottom-20 right-4 z-50 flex w-[calc(100vw-2rem)] max-w-[400px] origin-bottom-right flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl transition-all md:bottom-6 md:right-6",
-          "h-[min(70vh,560px)]",
+          "fixed bottom-20 right-4 z-50 flex w-[calc(100vw-2rem)] max-w-[720px] origin-bottom-right flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl transition-all md:bottom-6 md:right-6",
+          "h-[min(82vh,760px)]",
           open ? "scale-100 opacity-100" : "pointer-events-none scale-90 opacity-0",
         )}
         role="dialog"
@@ -191,10 +191,10 @@ export function ChatWidget() {
               <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
                 <div
                   className={cn(
-                    "max-w-[85%] rounded-2xl px-3 py-2 text-sm",
+                    "rounded-2xl px-3 py-2 text-sm",
                     m.role === "user"
-                      ? "rounded-br-sm bg-primary text-primary-foreground"
-                      : "rounded-bl-sm bg-card shadow-sm",
+                      ? "max-w-[85%] rounded-br-sm bg-primary text-primary-foreground"
+                      : "max-w-[95%] rounded-bl-sm bg-card shadow-sm",
                   )}
                 >
                   {m.role === "assistant" ? (
