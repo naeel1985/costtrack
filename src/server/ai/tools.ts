@@ -38,7 +38,7 @@ const iso = (d: Date) => format(d, "yyyy-MM-dd");
 
 const ACCOUNT_TYPE = { cash: "cash", bank: "bank", credit_card: "credit card", wallet: "wallet" } as const;
 
-/** OpenAI/Groq-style function schemas advertised to the model (and to MCP). */
+/** JSON-schema function definitions advertised to the model (and to MCP). */
 export const TOOL_SCHEMAS = [
   {
     name: "list_accounts",

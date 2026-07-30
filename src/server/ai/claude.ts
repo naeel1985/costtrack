@@ -1,17 +1,19 @@
 import "server-only";
 // ─────────────────────────────────────────────────────────────────────────────
-// Groq streaming chat loop for the private assistant.
+// Claude (Anthropic Messages API) streaming chat loop for the private assistant.
 //
-// Stateless: it receives the conversation, runs a tool-calling loop against Groq
-// (openai/gpt-oss-20b by default), and STREAMS the final answer back as
+// Stateless: it receives the conversation, runs a tool-calling loop against the
+// Claude API (claude-haiku-4-5 by default), and STREAMS the final answer back as
 // de-tokenised text. Nothing is stored. Only tokenised data ever leaves this
 // process — real names are substituted back only as the reply streams out.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { runTool, TOOL_SCHEMAS, type ToolContext } from "./tools";
 
-const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_TOOL_ROUNDS = 6;
+const MAX_TOKENS = 1024;
 
 /** Prepended server-side on every request; the user never sees or edits it. */
 export const SYSTEM_PROMPT = `You are a private financial assistant embedded in the user's own cost-tracking dashboard.
@@ -35,25 +37,32 @@ export interface ChatMessage {
   content: string;
 }
 
-interface ToolCallAcc {
-  id: string;
-  name: string;
-  args: string;
+type ContentBlockParam =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: unknown }
+  | { type: "tool_result"; tool_use_id: string; content: string };
+
+interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: string | ContentBlockParam[];
 }
-interface GroqMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
-  tool_calls?: { id: string; type: "function"; function: { name: string; arguments: string } }[];
-  tool_call_id?: string;
+
+interface StreamBlock {
+  type: string;
+  text: string;
+  json: string;
+  id?: string;
+  name?: string;
 }
 
 const toolDefs = TOOL_SCHEMAS.map((t) => ({
-  type: "function" as const,
-  function: { name: t.name, description: t.description, parameters: t.parameters },
+  name: t.name,
+  description: t.description,
+  input_schema: t.parameters,
 }));
 
 export function isConfigured() {
-  return Boolean(process.env.GROQ_API_KEY);
+  return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
 /**
@@ -64,42 +73,46 @@ export async function* runAssistantStream(
   history: ChatMessage[],
   ctx: ToolContext,
 ): AsyncGenerator<string> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error("GROQ_API_KEY is not configured.");
-  const model = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured.");
+  const model = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
 
   // Re-tokenise the whole history: prior assistant turns were de-tokenised for
   // display and the user may have typed a real name — only tokens go upstream.
-  const messages: GroqMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...history.map((m) => ({ role: m.role, content: ctx.tok.tokenize(m.content) })),
-  ];
+  const messages: AnthropicMessage[] = history.map((m) => ({
+    role: m.role,
+    content: ctx.tok.tokenize(m.content),
+  }));
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const res = await fetch(GROQ_URL, {
+    const res = await fetch(ANTHROPIC_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": ANTHROPIC_VERSION,
+      },
       body: JSON.stringify({
         model,
+        max_tokens: MAX_TOKENS,
+        system: SYSTEM_PROMPT,
         messages,
         tools: toolDefs,
-        tool_choice: "auto",
         temperature: 0.3,
         stream: true,
       }),
     });
     if (!res.ok || !res.body) {
       const detail = await res.text().catch(() => "");
-      throw new Error(`Groq request failed (${res.status}): ${detail.slice(0, 200)}`);
+      throw new Error(`Claude request failed (${res.status}): ${detail.slice(0, 200)}`);
     }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    let content = "";
-    let sawTool = false;
     let pending = ""; // buffered content awaiting a safe de-tokenisation boundary
-    const toolAcc: ToolCallAcc[] = [];
+    let stopReason: string | null = null;
+    const blocks = new Map<number, StreamBlock>();
 
     const flushSafe = (): string => {
       // A token never contains whitespace, so any complete word is safe to
@@ -122,64 +135,94 @@ export async function* runAssistantStream(
         buf = buf.slice(nl + 1);
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
-        if (data === "[DONE]") {
-          streamDone = true;
-          break;
-        }
-        let json: { choices?: { delta?: GroqMessage & { tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] } }[] };
+        if (!data) continue;
+        let json: {
+          type: string;
+          index?: number;
+          content_block?: { type: string; id?: string; name?: string };
+          delta?: { type: string; text?: string; partial_json?: string; stop_reason?: string };
+          error?: unknown;
+        };
         try {
           json = JSON.parse(data);
         } catch {
           continue;
         }
-        const delta = json.choices?.[0]?.delta;
-        if (!delta) continue;
-        if (delta.tool_calls) {
-          sawTool = true;
-          for (const tc of delta.tool_calls) {
-            const i = tc.index ?? 0;
-            const cur = toolAcc[i] ?? { id: "", name: "", args: "" };
-            if (tc.id) cur.id = tc.id;
-            if (tc.function?.name) cur.name += tc.function.name;
-            if (tc.function?.arguments) cur.args += tc.function.arguments;
-            toolAcc[i] = cur;
+        switch (json.type) {
+          case "content_block_start": {
+            if (json.index == null || !json.content_block) break;
+            blocks.set(json.index, {
+              type: json.content_block.type,
+              text: "",
+              json: "",
+              id: json.content_block.id,
+              name: json.content_block.name,
+            });
+            break;
           }
-        }
-        if (typeof delta.content === "string" && delta.content && !sawTool) {
-          content += delta.content;
-          pending += delta.content;
-          const chunk = flushSafe();
-          if (chunk) yield chunk;
+          case "content_block_delta": {
+            if (json.index == null || !json.delta) break;
+            const block = blocks.get(json.index);
+            if (!block) break;
+            if (json.delta.type === "text_delta" && json.delta.text) {
+              block.text += json.delta.text;
+              pending += json.delta.text;
+              const chunk = flushSafe();
+              if (chunk) yield chunk;
+            } else if (json.delta.type === "input_json_delta" && json.delta.partial_json) {
+              block.json += json.delta.partial_json;
+            }
+            break;
+          }
+          case "message_delta":
+            if (json.delta?.stop_reason) stopReason = json.delta.stop_reason;
+            break;
+          case "message_stop":
+            streamDone = true;
+            break;
+          case "error":
+            throw new Error(`Claude stream error: ${JSON.stringify(json.error).slice(0, 200)}`);
         }
       }
     }
 
-    const toolCalls = toolAcc.filter(Boolean);
-    if (toolCalls.length) {
-      messages.push({
-        role: "assistant",
-        content,
-        tool_calls: toolCalls.map((t) => ({
-          id: t.id,
-          type: "function",
-          function: { name: t.name, arguments: t.args },
-        })),
-      });
-      for (const call of toolCalls) {
+    const ordered = [...blocks.entries()].sort(([a], [b]) => a - b).map(([, b]) => b);
+    const toolBlocks = ordered.filter((b) => b.type === "tool_use");
+
+    if (stopReason === "tool_use" && toolBlocks.length) {
+      const assistantContent: ContentBlockParam[] = [];
+      for (const b of ordered) {
+        if (b.type === "text" && b.text) {
+          assistantContent.push({ type: "text", text: b.text });
+        } else if (b.type === "tool_use") {
+          let input: unknown = {};
+          try {
+            input = b.json ? JSON.parse(b.json) : {};
+          } catch {
+            input = {};
+          }
+          assistantContent.push({ type: "tool_use", id: b.id!, name: b.name!, input });
+        }
+      }
+      messages.push({ role: "assistant", content: assistantContent });
+
+      const resultBlocks: ContentBlockParam[] = [];
+      for (const b of toolBlocks) {
         let args: Record<string, unknown> = {};
         try {
-          args = call.args ? JSON.parse(call.args) : {};
+          args = b.json ? JSON.parse(b.json) : {};
         } catch {
           args = {};
         }
         let result: unknown;
         try {
-          result = await runTool(call.name, args, ctx);
+          result = await runTool(b.name!, args, ctx);
         } catch (e) {
           result = { error: e instanceof Error ? e.message : "tool failed" };
         }
-        messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+        resultBlocks.push({ type: "tool_result", tool_use_id: b.id!, content: JSON.stringify(result) });
       }
+      messages.push({ role: "user", content: resultBlocks });
       continue;
     }
 

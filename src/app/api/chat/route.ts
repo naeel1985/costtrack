@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAuth } from "@/server/auth";
 import { createToolContext } from "@/server/ai/tools";
-import { runAssistantStream, isConfigured, type ChatMessage } from "@/server/ai/groq";
+import { runAssistantStream, isConfigured, type ChatMessage } from "@/server/ai/claude";
 
 // Never cached, never stored — every request is self-contained.
 export const dynamic = "force-dynamic";

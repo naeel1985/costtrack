@@ -76,7 +76,7 @@ card blown past its limit — by showing them **before** they happen.
 | Database | **PostgreSQL** (hosted on **Neon**), accessed via **Prisma 6** ORM |
 | Styling | **Tailwind CSS v4** + **shadcn/ui** components on **Radix UI** primitives |
 | Charts | **Recharts 3** |
-| AI assistant | **Groq** API (OpenAI-compatible), model `openai/gpt-oss-20b`, via a hand-rolled **MCP** server |
+| AI assistant | **Claude** (Anthropic Messages API), model `claude-haiku-4-5`, via a hand-rolled **MCP** server |
 | Testing | **Vitest 4** (pure-logic unit tests) |
 | Hosting | **cPanel / Phusion Passenger** (Node), custom `server.js` |
 
@@ -120,7 +120,7 @@ card blown past its limit — by showing them **before** they happen.
 
 ## AI assistant (privacy-preserving)
 
-- Chat is powered by the **Groq** API (OpenAI-compatible endpoint), streamed to a
+- Chat is powered by the **Claude** API (Anthropic Messages endpoint), streamed to a
   floating chat widget via a `ReadableStream`.
 - The app exposes an in-process **MCP** (Model Context Protocol) server —
   JSON-RPC 2.0 over HTTP — giving the model read-only tools over the user's data.
@@ -154,6 +154,6 @@ card blown past its limit — by showing them **before** they happen.
 - **TypeScript** throughout; **ESLint 9** (`eslint-config-next`) for linting;
   **tsx** for running TypeScript scripts (seeding, maintenance).
 - Deployed to **cPanel** with **Phusion Passenger** serving the Node process.
-  Secrets (database URL, server/session keys, SMTP, Groq API key) are supplied
+  Secrets (database URL, server/session keys, SMTP, Anthropic API key) are supplied
   via environment variables and must match between environments, or encrypted
   data becomes unreadable.
