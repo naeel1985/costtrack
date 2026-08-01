@@ -25,18 +25,21 @@ export function BankPickerDialog({
 }) {
   const [picked, setPicked] = React.useState<Bank | null>(null);
 
-  React.useEffect(() => {
-    if (open) setPicked(null);
-  }, [open]);
+  // Reset on close (rather than on open, via an effect) so the dialog always
+  // starts back at the search step next time it's opened.
+  function handleOpenChange(next: boolean) {
+    if (!next) setPicked(null);
+    onOpenChange(next);
+  }
 
   function confirm() {
     if (!picked) return;
     onSelect(picked.name);
-    onOpenChange(false);
+    handleOpenChange(false);
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-md overflow-hidden p-0">
         {!picked ? (
           <Command>

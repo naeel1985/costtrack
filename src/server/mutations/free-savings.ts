@@ -4,7 +4,8 @@ import { prisma } from "@/lib/db";
 import { decryptAccount, decryptTransaction, encInt, decInt } from "@/server/crypto-map";
 import { computeBalances } from "@/server/balances";
 import { nextStatement } from "@/lib/card-cycle";
-import { realizeCycle, type DatedAmount } from "@/lib/free-savings-pool";
+import { realizeCycle } from "@/lib/free-savings-pool";
+import type { DatedAmount } from "@/lib/cashflow-timeline";
 import type { AuthContext } from "@/server/auth";
 
 /**
