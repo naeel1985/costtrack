@@ -77,6 +77,8 @@ model User {
   exchangeRates  ExchangeRate[]
   settings       AppSetting?
   notificationAcks NotificationAck[]
+  freeSavingsState FreeSavingsState?
+  freeSavingsCycles FreeSavingsCycle[]
 
   @@index([email])
   @@index([role])
@@ -259,6 +261,11 @@ model RecurringRule {
   occurrenceCount Int?
   nextRunDate     DateTime
   isActive        Boolean  @default(true)
+  // Income rules only: marks the ONE recurring income rule that represents the
+  // user's salary. Confirming an occurrence of this rule (via the existing
+  // debit/undo flow) closes a free-savings cycle. At most one true per user —
+  // enforced in the mutation layer, not the DB.
+  isSalary        Boolean  @default(false)
 
   amountEnc       String // encrypted minor units
   currency        String   @default("AED")
@@ -415,4 +422,44 @@ model AppSetting {
   theme              String   @default("system")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+}
+
+// ── Free-savings pool ──────────────────────────────────────────────────────────
+// A cumulative ledger, distinct from any live projection: it only changes when
+// a salary occurrence is confirmed ("debited"), at which point the cycle since
+// the last confirmation is realized (actual posted income − actual posted
+// costs, including any credit-card statement that closed in the window) and
+// folded into the running pool. See packages/core/src/free-savings-pool.ts.
+
+// One row per user: the current pool value and where the NEXT cycle starts
+// counting from. Lazily created (bootstrapped from current account balances)
+// the first time it's needed.
+model FreeSavingsState {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  poolEnc    String // encrypted signed minor units — current realized pool
+  anchorDate DateTime // start of the next cycle window (= end of the last realized cycle)
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+}
+
+// Append-only history of realized cycles, one row per confirmed salary debit.
+// Kept for audit/display; FreeSavingsState always mirrors the latest row here
+// (or the bootstrap values if none exist yet).
+model FreeSavingsCycle {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ruleId       String // the salary RecurringRule this cycle closed against
+  cycleStart   DateTime
+  cycleEnd     DateTime // the confirmed salary debit date
+  incomeEnc    String // encrypted minor units (>= 0)
+  costsEnc     String // encrypted minor units (>= 0)
+  savingsEnc   String // encrypted SIGNED minor units (income − costs)
+  poolAfterEnc String // encrypted SIGNED minor units (pool value after this cycle)
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([userId, cycleEnd])
 }

@@ -71,6 +71,7 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
       endDate: r.endDate,
       occurrenceCount: r.occurrenceCount,
       isActive: r.isActive,
+      isSalary: r.isSalary,
       accountId: r.accountId,
       accountName: r.account?.name ?? "",
       categoryId: r.categoryId,

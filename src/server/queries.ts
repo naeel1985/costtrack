@@ -7,6 +7,7 @@
 import {
   addDays,
   addMonths,
+  differenceInCalendarDays,
   endOfMonth,
   format,
   startOfDay,
@@ -16,6 +17,7 @@ import {
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/server/auth";
 import {
+  decInt,
   decryptAccount,
   decryptBudget,
   decryptCategory,
@@ -40,12 +42,12 @@ import {
 } from "@/lib/projection";
 import { computeBalances } from "./balances";
 import {
-  computeSalaryPeriod,
+  buildCashflowTimeline,
+  freeSavingsAt,
+  type CashflowTimeline,
   type DatedAmount,
-  type SalaryPeriodResult,
-} from "@/lib/salary-period";
-import { buildCashflowTimeline, type CashflowTimeline } from "@/lib/cashflow-timeline";
-import { cardCycleBills, nextDueDate, statementDateForDue } from "@/lib/card-cycle";
+} from "@/lib/cashflow-timeline";
+import { cardCycleBills, nextDueDate, nextStatement, statementDateForDue } from "@/lib/card-cycle";
 import {
   buildNotifications,
   type NotificationItem,
@@ -53,8 +55,8 @@ import {
   type SalaryReadySignal,
 } from "@/lib/notifications";
 
-/** The dashboard always builds a full year so any date in it can be inspected. */
-export const TIMELINE_MONTHS = 12;
+/** The free-savings pool projection looks 2 years ahead, daily granularity. */
+export const POOL_TIMELINE_MONTHS = 24;
 
 export async function getSettings() {
   const { user } = await requireUser();
@@ -317,26 +319,56 @@ export async function getUpcomingObligations(horizonDays = 90): Promise<Upcoming
   return items.sort((a, b) => a.date.getTime() - b.date.getTime());
 }
 
+export interface NextSalary {
+  date: Date;
+  amountMinor: number;
+  name: string;
+}
+export interface NextCardDue {
+  date: Date;
+  amountMinor: number;
+  cardName: string;
+}
+export interface NextCheque {
+  date: Date;
+  amountMinor: number;
+  direction: string;
+  counterparty: string;
+}
+export interface NextProvision {
+  date: Date;
+  amountMinor: number;
+  name: string;
+}
+
 /**
- * Assemble the salary-period view: this period's income vs its committed costs,
- * and how much of current savings is genuinely free. See `lib/salary-period.ts`
- * for the definitions. `accounts` is passed in so we reuse the already-computed
- * balances instead of re-folding the ledger.
+ * Assemble the forward-looking dashboard view: the free-savings pool (the
+ * realized ledger, or today's live balance if no cycle has been confirmed
+ * yet), what's next (salary, card due, cheque, provision), a provisional pool
+ * value at the next salary date, and the 2-year daily/cycle timeline. See
+ * `lib/free-savings-pool.ts` for the pool's definitions. `accounts` is passed
+ * in so we reuse the already-computed balances instead of re-folding the
+ * ledger.
  */
-async function loadForwardView(
+export async function loadForwardView(
   userId: string,
   dek: Buffer,
   accounts: AccountWithBalance[],
 ): Promise<{
-  salaryPeriod: SalaryPeriodResult;
+  poolMinor: number;
+  nextSalary: NextSalary | null;
+  nextCardDue: NextCardDue | null;
+  nextCheque: NextCheque | null;
+  nextProvision: NextProvision | null;
+  provisionalPoolAtNextSalaryMinor: number | null;
   timeline: CashflowTimeline;
   creditCardOwedMinor: number;
   savingsMinor: number;
 }> {
   const today = startOfDay(new Date());
-  // One year: the dashboard lets the user read free savings at ANY date within
-  // it, so we always build the full 12 months regardless of the chart window.
-  const windowEnd = addMonths(today, TIMELINE_MONTHS);
+  // Two years: the pool graph projects that far ahead, so every other lookup
+  // in this function (next cheque, next provision, ...) shares the same window.
+  const windowEnd = addMonths(today, POOL_TIMELINE_MONTHS);
 
   // Card accounts with a due day — their posted spend is fetched so future-dated
   // charges can be billed on their own cycle instead of the current one.
@@ -344,7 +376,7 @@ async function loadForwardView(
     .filter((a) => a.type === "credit_card" && a.dueDay != null)
     .map((a) => a.id);
 
-  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx, rawDebited] = await Promise.all([
+  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx, rawDebited, rawPoolState] = await Promise.all([
     prisma.recurringRule.findMany({ where: { userId, isActive: true } }),
     prisma.pDC.findMany({ where: { userId, status: "pending", dueDate: { gte: today, lte: windowEnd } } }),
     prisma.provision.findMany({
@@ -368,6 +400,9 @@ async function loadForwardView(
       where: { userId, status: "posted", type: "income", recurringRuleId: { not: null } },
       select: { recurringRuleId: true, date: true },
     }),
+    // The realized pool ledger — read-only here. Bootstrapping (a write) only
+    // happens inside the salary-debit mutation, never from a query.
+    prisma.freeSavingsState.findUnique({ where: { userId } }),
   ]);
 
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
@@ -416,16 +451,19 @@ async function loadForwardView(
   // drops any that would land on an already-past due date.
   const cardChargeWindowStart = subMonths(today, 2);
 
-  // Salary defines the cycle boundaries: monthly income rules only. It's reserved
-  // to cover its own cycle's costs, so only its surplus becomes free savings.
-  const salaryEvents: DatedAmount[] = rules
-    .filter((r) => r.type === "income" && r.frequency === "monthly")
-    .flatMap((r) => expand(r).filter(notDebited(r.id)).map((date) => ({ date, amountMinor: r.amountMinor })));
+  // Salary is the ONE explicitly-flagged income rule (see RecurringRule.isSalary).
+  // Confirming its occurrence closes a free-savings cycle (see mutations/free-savings.ts).
+  const salaryRule = rules.find((r) => r.type === "income" && r.isSalary);
+  const salaryEvents: DatedAmount[] = salaryRule
+    ? expand(salaryRule)
+        .filter(notDebited(salaryRule.id))
+        .map((date) => ({ date, amountMinor: salaryRule.amountMinor }))
+    : [];
 
-  // Every other income stream (any non-monthly cadence, scheduled income and
+  // Every other income stream (business/freelance income, scheduled income and
   // received cheques) is pure free savings the moment it lands.
   const otherIncomeEvents: DatedAmount[] = rules
-    .filter((r) => r.type === "income" && r.frequency !== "monthly")
+    .filter((r) => r.type === "income" && r.id !== salaryRule?.id)
     .flatMap((r) => expand(r).filter(notDebited(r.id)).map((date) => ({ date, amountMinor: r.amountMinor })));
 
   // Committed costs: recurring costs, scheduled spend, issued cheques due and
@@ -450,16 +488,28 @@ async function loadForwardView(
       else costEvents.push(e);
     }
   }
+  // Next cheque (either direction) and next provision due — tracked alongside
+  // the cost/income folding above so we don't re-decrypt these rows below.
+  let nextCheque: NextCheque | null = null;
+  let nextProvision: NextProvision | null = null;
   for (const raw of rawPdcs) {
     const p = decryptPdc(raw, dek);
     if (p.direction === "issued") costEvents.push({ date: p.dueDate, amountMinor: p.amountMinor });
     else otherIncomeEvents.push({ date: p.dueDate, amountMinor: p.amountMinor });
+    if (!nextCheque || p.dueDate < nextCheque.date) {
+      nextCheque = { date: p.dueDate, amountMinor: p.amountMinor, direction: p.direction, counterparty: p.counterparty };
+    }
   }
   for (const raw of rawProvisions) {
     const pr = decryptProvision(raw, dek);
     const funded = pr.allocations.reduce((s, a) => s + a.amountMinor, 0);
     const remaining = Math.max(0, pr.targetMinor - funded);
-    if (remaining > 0 && pr.dueDate) costEvents.push({ date: pr.dueDate, amountMinor: remaining });
+    if (remaining > 0 && pr.dueDate) {
+      costEvents.push({ date: pr.dueDate, amountMinor: remaining });
+      if (!nextProvision || pr.dueDate < nextProvision.date) {
+        nextProvision = { date: pr.dueDate, amountMinor: remaining, name: pr.name };
+      }
+    }
   }
 
   // Each card's current balance + future charges become repayment events on the
@@ -467,6 +517,7 @@ async function loadForwardView(
   // They go into costEvents (for the maths) and into cardBillEvents (so the
   // dashboard can show the "Total Amount Due" spike landing on each due date).
   const cardBillEvents: DatedAmount[] = [];
+  let nextCardDue: NextCardDue | null = null;
   for (const card of cards) {
     const dueDay = card.dueDay!;
     const owedNow = Math.max(0, -card.balanceMinor);
@@ -477,36 +528,64 @@ async function loadForwardView(
     const posted = postedByCard.get(card.id) ?? [];
     const futurePosted = posted.filter((c) => startOfDay(c.date).getTime() > thisStatement);
     const futurePostedSum = futurePosted.reduce((s, c) => s + Math.max(0, c.amountMinor), 0);
+    const allCharges = [...(cardCharges.get(card.id) ?? []), ...futurePosted];
 
     const bills = cardCycleBills(
       {
         dueDay,
         owedNowMinor: Math.max(0, owedNow - futurePostedSum),
-        charges: [...(cardCharges.get(card.id) ?? []), ...futurePosted],
+        charges: allCharges,
       },
       today,
       windowEnd,
     );
     costEvents.push(...bills);
     cardBillEvents.push(...bills);
+
+    const stmt = nextStatement(dueDay, owedNow, allCharges, today);
+    if (stmt && (!nextCardDue || stmt.paymentDueDate < nextCardDue.date)) {
+      nextCardDue = { date: stmt.paymentDueDate, amountMinor: stmt.totalAmountDueMinor, cardName: card.name };
+    }
   }
 
-  const salaryPeriod = computeSalaryPeriod({ today, savingsMinor, salaryEvents, costEvents, otherIncomeEvents });
+  // The pool: the realized ledger if a cycle has ever closed, else today's live
+  // balance for display (bootstrapping/persisting only ever happens inside the
+  // salary-debit mutation — see mutations/free-savings.ts).
+  const poolMinor = rawPoolState ? decInt(rawPoolState.poolEnc, dek) : savingsMinor;
+
   const timeline = buildCashflowTimeline({
     today,
-    savingsMinor,
+    savingsMinor: poolMinor,
     salaryEvents,
     otherIncomeEvents,
     costEvents,
     cardBillEvents,
-    months: TIMELINE_MONTHS,
+    months: POOL_TIMELINE_MONTHS,
   });
 
   const creditCardOwedMinor = accounts
     .filter((a) => a.type === "credit_card")
     .reduce((s, a) => s + Math.max(0, -a.balanceMinor), 0);
 
-  return { salaryPeriod, timeline, creditCardOwedMinor, savingsMinor };
+  const nextSalary: NextSalary | null = salaryEvents.length
+    ? { date: salaryEvents[0].date, amountMinor: salaryEvents[0].amountMinor, name: salaryRule!.name }
+    : null;
+
+  const provisionalPoolAtNextSalaryMinor = nextSalary
+    ? (freeSavingsAt(timeline.daily, differenceInCalendarDays(startOfDay(nextSalary.date), today))?.freeSavingsMinor ?? null)
+    : null;
+
+  return {
+    poolMinor,
+    nextSalary,
+    nextCardDue,
+    nextCheque,
+    nextProvision,
+    provisionalPoolAtNextSalaryMinor,
+    timeline,
+    creditCardOwedMinor,
+    savingsMinor,
+  };
 }
 
 export interface DashboardData {
@@ -519,7 +598,12 @@ export interface DashboardData {
   projection: ProjectionResult;
   obligations: UpcomingObligation[];
   baseCurrency: string;
-  salaryPeriod: SalaryPeriodResult;
+  poolMinor: number;
+  nextSalary: NextSalary | null;
+  nextCardDue: NextCardDue | null;
+  nextCheque: NextCheque | null;
+  nextProvision: NextProvision | null;
+  provisionalPoolAtNextSalaryMinor: number | null;
   timeline: CashflowTimeline;
   creditCardOwedMinor: number;
   savingsMinor: number;
@@ -555,11 +639,17 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
   const monthlyNetMinor = Math.round((income3 - expense3) / 3);
   const runway = computeRunway(netWorthMinor, monthlyNetMinor, now);
 
-  const { salaryPeriod, timeline, creditCardOwedMinor, savingsMinor } = await loadForwardView(
-    user.id,
-    dek,
-    accounts,
-  );
+  const {
+    poolMinor,
+    nextSalary,
+    nextCardDue,
+    nextCheque,
+    nextProvision,
+    provisionalPoolAtNextSalaryMinor,
+    timeline,
+    creditCardOwedMinor,
+    savingsMinor,
+  } = await loadForwardView(user.id, dek, accounts);
 
   return {
     accounts,
@@ -571,7 +661,12 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
     projection: result,
     obligations,
     baseCurrency: settings.baseCurrency,
-    salaryPeriod,
+    poolMinor,
+    nextSalary,
+    nextCardDue,
+    nextCheque,
+    nextProvision,
+    provisionalPoolAtNextSalaryMinor,
     timeline,
     creditCardOwedMinor,
     savingsMinor,

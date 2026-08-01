@@ -17,7 +17,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { addDays, addMonths, differenceInCalendarDays, format, startOfDay, startOfMonth } from "date-fns";
-import type { DatedAmount } from "./salary-period";
+
+export interface DatedAmount {
+  date: Date;
+  amountMinor: number; // positive magnitude
+}
 
 export interface CashflowTimelineInput {
   today: Date;

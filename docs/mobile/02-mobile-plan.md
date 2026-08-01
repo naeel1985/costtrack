@@ -128,7 +128,7 @@ existing query** — no engine logic is re-implemented.
 | `POST /api/v1/auth/login` | `loginUser` core | returns `{ token, expiresAt, user }` |
 | `POST /api/v1/auth/logout` | `destroySession` | |
 | `GET /api/v1/auth/me` | `getAuth` | validate stored token on launch |
-| `GET /api/v1/dashboard?horizonDays=90` | `getDashboard` | the big one — accounts, projection, timeline, salaryPeriod, obligations |
+| `GET /api/v1/dashboard?horizonDays=90` | `getDashboard` | the big one — accounts, projection, timeline, obligations, free-savings pool (`poolMinor`, `nextSalary`, `nextCardDue`, `nextCheque`, `nextProvision`, `provisionalPoolAtNextSalaryMinor` — superseded `salaryPeriod`, see DECISIONS.md) |
 | `GET /api/v1/accounts` | `getAccountsWithBalances` | |
 | `GET /api/v1/transactions?type&accountId&from&to&search` | `getTransactions` | capped at 500 as today |
 | `GET /api/v1/obligations?horizonDays=90` | `getUpcomingObligations` | |

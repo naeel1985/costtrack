@@ -1,0 +1,8 @@
+# This app is a dynamic Node/Passenger service (session-gated, live DB reads on
+# every request) — LiteSpeed's page cache must never serve a stale response for
+# it. Without this, LSCache can keep serving an old build's output after a
+# `git pull` + `npm run build` + Passenger restart, making deploys look like
+# they didn't take effect.
+<IfModule LiteSpeed>
+  CacheDisable public /
+</IfModule>

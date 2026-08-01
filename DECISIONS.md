@@ -46,6 +46,40 @@ Running log of the meaningful choices made while building Cashflow, and why.
   zero-config path still works. Cards are excluded from "free savings" and from
   every cash/debit/transfer picker.
 
+## Free-savings pool
+
+- **The pool is a cumulative ledger, not a live projection.** *(Supersedes an
+  earlier fixed-30-day live-window model.)* Unlike the projection engine (which
+  recomputes from scratch on every read), the free-savings pool
+  (`packages/core/src/free-savings-pool.ts`) only changes when the user
+  explicitly **confirms a salary debit** (the existing recurring-income
+  "debit"/"undo" flow, `src/server/mutations/income.ts`). Confirming closes a
+  *cycle*: actual posted income minus actual posted/closed costs since the last
+  confirmation (including any credit-card statement that closed in the window)
+  is folded into the running pool, which is persisted (`FreeSavingsState`,
+  `FreeSavingsCycle` — encrypted, per-user) rather than derived. This matches
+  how the user actually thinks about "what's safely spendable": it doesn't wobble
+  with every pending/scheduled item, only with money that's actually landed.
+- **One recurring income rule is explicitly "the salary."**
+  `RecurringRule.isSalary` (at most one `true` per user, enforced in
+  `saveRecurringCore`) replaced an earlier implicit "any monthly-frequency
+  income = salary" convention — that broke down as soon as a user had more than
+  one monthly income stream. Only confirming *that* rule's occurrence closes a
+  cycle; other income (business/freelance, one-off) counts toward a cycle's
+  income but never triggers one.
+- **Bootstrapping reads current balances, never writes from a query.** The pool
+  is lazily created the first time a salary is confirmed, seeded from the
+  user's asset-account balances at that moment (`getOrCreateFreeSavingsState`,
+  called only from the mutation path). Dashboard reads fall back to today's live
+  balance for *display* when no pool row exists yet, but never persist it —
+  keeping the read/write split (`CLAUDE.md` → Server Components read / Server
+  Actions write) intact even for this stateful feature.
+- **Credit-card cost for a cycle = the statement due in that window**, sourced
+  via the same `nextStatement` the dashboard/AI tool already use for "next
+  payment due" — not re-derived by bucketing individual charges. Simpler, and
+  it means the pool math and the visible "next credit card due" figure can
+  never silently disagree.
+
 ## Charts
 
 - **Income/cost series are re-stepped away from `--positive`/`--negative`.** The

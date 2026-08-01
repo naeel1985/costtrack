@@ -26,6 +26,9 @@ export async function saveRecurringCore(auth: AuthContext, input: unknown): Prom
   await assertOwnsAccounts(user.id, [data.accountId]);
   await assertOwnsCategory(user.id, data.categoryId);
 
+  // Only an income rule can be THE salary; at most one per user.
+  const isSalary = data.type === "income" && data.isSalary === true;
+
   const base = {
     nameEnc: encStr(data.name, dek),
     type: data.type,
@@ -39,6 +42,7 @@ export async function saveRecurringCore(auth: AuthContext, input: unknown): Prom
     accountId: data.accountId,
     categoryId: data.categoryId || null,
     noteEnc: encNull(data.note, dek),
+    isSalary,
   };
   const nextRunDate = computeNextRunDate({
     frequency: data.frequency,
@@ -52,7 +56,16 @@ export async function saveRecurringCore(auth: AuthContext, input: unknown): Prom
   if (data.id) {
     const owned = await prisma.recurringRule.findFirst({ where: { id: data.id, userId: user.id } });
     if (!owned) return { ok: false, error: "Rule not found", status: 404 };
-    id = (await prisma.recurringRule.update({ where: { id: data.id }, data: { ...base, nextRunDate } })).id;
+    id = data.id;
+    await prisma.$transaction(async (tx) => {
+      if (isSalary) await tx.recurringRule.updateMany({ where: { userId: user.id, isSalary: true, NOT: { id } }, data: { isSalary: false } });
+      await tx.recurringRule.update({ where: { id }, data: { ...base, nextRunDate } });
+    });
+  } else if (isSalary) {
+    id = await prisma.$transaction(async (tx) => {
+      await tx.recurringRule.updateMany({ where: { userId: user.id, isSalary: true }, data: { isSalary: false } });
+      return (await tx.recurringRule.create({ data: { ...base, nextRunDate, userId: user.id } })).id;
+    });
   } else {
     id = (await prisma.recurringRule.create({ data: { ...base, nextRunDate, userId: user.id } })).id;
   }

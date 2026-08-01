@@ -20,9 +20,10 @@ import { freeSavingsAt, type FreeSavingsPoint } from "@/lib/cashflow-timeline";
 import { cn } from "@/lib/utils";
 
 /**
- * Scrub to any day in the next year and read the free savings projected for it,
- * against the known costs committed by then. Both the slider and the graph
- * itself drive the selection — dragging or hovering the chart moves the marker.
+ * Scrub to any day in the next 2 years and read the free-savings pool
+ * provisioned for it, against the known costs committed by then. Both the
+ * slider and the graph itself drive the selection — dragging or hovering the
+ * chart moves the marker.
  *
  * A single series, so no legend (the title names it); only the selected day is
  * direct-labelled rather than labelling every point.
@@ -51,7 +52,7 @@ export function FreeSavingsExplorer({
         </CardHeader>
         <CardContent>
           <p className="py-8 text-center text-sm text-muted-foreground">
-            Add accounts and recurring items to project your savings across the year.
+            Add accounts and recurring items to project your free-savings pool across the next 2 years.
           </p>
         </CardContent>
       </Card>
@@ -73,8 +74,8 @@ export function FreeSavingsExplorer({
           <CalendarSearch className="h-4 w-4" /> Free savings on any date
         </CardTitle>
         <p className="mt-1 text-sm text-muted-foreground">
-          Projected = free savings today + income received by the chosen day − known costs by then.
-          Drag the slider or hover the graph to any day in the next 12 months.
+          Provisioned = today&apos;s free-savings pool + income received by the chosen day − known costs by
+          then. Drag the slider or hover the graph to any day in the next 2 years.
         </p>
       </CardHeader>
 
@@ -151,7 +152,7 @@ export function FreeSavingsExplorer({
                 dataKey="t"
                 type="number"
                 domain={["dataMin", "dataMax"]}
-                tickFormatter={(t) => format(new Date(t), "MMM")}
+                tickFormatter={(t) => format(new Date(t), "MMM yy")}
                 tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                 interval="preserveStartEnd"
                 minTickGap={32}

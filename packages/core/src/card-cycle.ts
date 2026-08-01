@@ -22,7 +22,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { addDays, addMonths, getDaysInMonth, isAfter, setDate, startOfDay, subMonths } from "date-fns";
-import type { DatedAmount } from "./salary-period";
+import type { DatedAmount } from "./cashflow-timeline";
 
 /** A statement is issued this many days after the previous month's due date. */
 export const STATEMENT_LEAD_DAYS = 5;

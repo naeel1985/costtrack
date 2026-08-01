@@ -114,6 +114,9 @@ export const recurringSchema = z.object({
   accountId: z.string().min(1),
   categoryId: z.string().optional().nullable(),
   note: z.string().max(280).optional().nullable(),
+  // Income rules only: marks this as THE salary rule (at most one per user —
+  // enforced in the mutation, not here). Ignored for expense rules.
+  isSalary: z.boolean().optional().default(false),
 });
 export type RecurringInput = z.infer<typeof recurringSchema>;
 

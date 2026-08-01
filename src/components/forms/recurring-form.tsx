@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Field } from "./field";
 import { saveRecurring } from "@/server/actions";
 import { RECURRENCE_FREQUENCIES } from "@/lib/domain";
@@ -32,6 +33,7 @@ interface FormValues {
   endDate: string;
   occurrenceCount: string;
   note: string;
+  isSalary: boolean;
 }
 
 export interface RecurringInitial {
@@ -46,6 +48,7 @@ export interface RecurringInitial {
   endDate?: Date | null;
   occurrenceCount?: number | null;
   note?: string | null;
+  isSalary?: boolean;
 }
 
 export function RecurringForm({
@@ -75,6 +78,7 @@ export function RecurringForm({
       endDate: format(initial?.endDate ?? addMonths(new Date(), 12), "yyyy-MM-dd"),
       occurrenceCount: String(initial?.occurrenceCount ?? 12),
       note: initial?.note ?? "",
+      isSalary: initial?.isSalary ?? false,
     },
   });
 
@@ -119,6 +123,7 @@ export function RecurringForm({
         accountId: v.accountId,
         categoryId: v.categoryId || null,
         note: v.note || null,
+        isSalary: kind === "income" ? v.isSalary : false,
       });
       if (res.ok) {
         toast.success(initial?.id ? "Recurring rule updated" : "Recurring rule created");
@@ -134,6 +139,19 @@ export function RecurringForm({
       <Field label="Name" htmlFor="rname">
         <Input id="rname" placeholder={kind === "income" ? "Salary" : "Rent"} {...register("name", { required: true })} />
       </Field>
+
+      {kind === "income" && (
+        <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2.5">
+          <div>
+            <div className="text-sm font-medium">This is my salary</div>
+            <p className="text-xs text-muted-foreground">
+              Confirming a debit of this income closes a free-savings cycle. Only one rule can be marked as
+              salary — marking this one unmarks any other.
+            </p>
+          </div>
+          <Switch checked={values.isSalary} onCheckedChange={(v) => setValue("isSalary", v)} />
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Amount" hint={currency}>

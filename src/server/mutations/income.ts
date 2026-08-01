@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { toMinor } from "@/lib/money";
 import { decryptRecurring, encInt, encStr } from "@/server/crypto-map";
 import type { AuthContext } from "@/server/auth";
+import { realizeSalaryCycle, reverseSalaryCycleIfLatest } from "./free-savings";
 import { zodFail, type MutationResult } from "./types";
 
 const debitOccurrenceSchema = z.object({
@@ -77,6 +78,10 @@ export async function debitRecurringOccurrenceCore(
       status: "posted",
     },
   });
+
+  // Confirming the SALARY rule's occurrence closes a free-savings cycle.
+  if (rule.isSalary) await realizeSalaryCycle(auth, rule.id, day);
+
   return { ok: true };
 }
 
@@ -102,5 +107,10 @@ export async function undoRecurringOccurrenceCore(
     },
   });
   if (res.count === 0) return { ok: false, error: "Nothing to undo", status: 404 };
+
+  // If this was the salary rule and the cycle it closed is still the latest
+  // one on record, roll the pool back too (no-ops otherwise — see the
+  // function's own doc comment for the "not the latest cycle" case).
+  await reverseSalaryCycleIfLatest(auth, data.ruleId, data.date);
   return { ok: true };
 }

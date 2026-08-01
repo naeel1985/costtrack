@@ -9,7 +9,7 @@ export * from "./domain";
 export * from "./banks";
 export * from "./initials";
 export * from "./card-cycle";
-export * from "./salary-period";
+export * from "./free-savings-pool";
 export * from "./cashflow-timeline";
 export * from "./projection";
 export * from "./notifications";

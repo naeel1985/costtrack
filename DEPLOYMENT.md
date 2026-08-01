@@ -100,3 +100,12 @@ Nothing else changes — the app is the same.
   Install** so the promoted packages land, then `npm run build`.
 - **Outbound network:** the server must reach Neon (`*.neon.tech:5432`) and Gmail
   (`smtp.gmail.com:465`). These are open on most cPanel hosts.
+- **LiteSpeed page cache can serve a stale build after you deploy.** Many cPanel
+  hosts run LiteSpeed with LSCache enabled by default. Since this app is a
+  dynamic Passenger/Node service (session-gated, live DB reads per request), a
+  cached page can make a `git pull` + `npm run build` + restart look like it had
+  no effect — you're still looking at a cached response, not the new build. The
+  repo's `.htaccess` disables LSCache for the whole app (`CacheDisable public /`)
+  so this shouldn't recur, but if you ever see "changes not showing" after a
+  clean rebuild + restart, purge the domain's cache from cPanel's **LiteSpeed
+  Web Cache Manager** (Purge All) before debugging anything else.

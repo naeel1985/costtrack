@@ -35,6 +35,7 @@ export interface RecurringRow {
   endDate: Date | null;
   occurrenceCount: number | null;
   isActive: boolean;
+  isSalary: boolean;
   accountId: string;
   accountName: string;
   categoryId: string | null;
@@ -74,6 +75,7 @@ export function RecurringSection({
       startDate: r.startDate,
       endDate: r.endDate,
       occurrenceCount: r.occurrenceCount,
+      isSalary: r.isSalary,
     });
     setDialogOpen(true);
   }
@@ -120,6 +122,11 @@ export function RecurringSection({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-medium">{r.name}</span>
+                    {r.isSalary && (
+                      <Badge variant="info" className="px-1.5 py-0 text-[10px]">
+                        Salary
+                      </Badge>
+                    )}
                     {r.categoryName && (
                       <Badge variant="neutral" className="px-1.5 py-0 text-[10px]">
                         {r.categoryName}

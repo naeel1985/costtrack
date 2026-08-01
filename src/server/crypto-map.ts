@@ -110,6 +110,7 @@ export function decryptRecurring(r: Raw, dek: Buffer) {
     occurrenceCount: (r.occurrenceCount as number | null) ?? null,
     nextRunDate: r.nextRunDate as Date,
     isActive: r.isActive as boolean,
+    isSalary: (r.isSalary as boolean | undefined) ?? false,
     amountMinor: decInt(r.amountEnc as string, dek),
     currency: r.currency as string,
     accountId: r.accountId as string,

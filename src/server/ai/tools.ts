@@ -20,6 +20,7 @@ import {
 import { computeBalances } from "@/server/balances";
 import { expandRecurrence } from "@/lib/projection";
 import { nextStatement } from "@/lib/card-cycle";
+import { loadForwardView } from "@/server/queries";
 import { buildTokenizer, type Tokenizer } from "./tokenizer";
 
 export interface ToolContext {
@@ -88,6 +89,12 @@ export const TOOL_SCHEMAS = [
       },
       additionalProperties: false,
     },
+  },
+  {
+    name: "get_free_savings_pool",
+    description:
+      "The free-savings pool: a cumulative figure that only changes when the user CONFIRMS a salary debit (not a live running balance). Returns the current pool amount, what's next (salary, credit-card due, cheque, provision — each with date and amount), and a provisional pool estimate for the next salary date. Use this for any question about \"free savings\", \"how much can I safely spend\", \"what's left over\", or \"will I be okay next cycle\" — do not derive this from list_accounts balances, which is a different, uncommitted number.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
   },
 ] as const;
 
@@ -380,6 +387,46 @@ async function searchTransactions(
   };
 }
 
+async function getFreeSavingsPool(ctx: ToolContext) {
+  const accounts = (await loadAccountsWithBalances(ctx)).filter((a) => !a.isArchived);
+  const forward = await loadForwardView(ctx.userId, ctx.dek, accounts);
+
+  return {
+    poolAmount: money(forward.poolMinor),
+    nextSalary: forward.nextSalary
+      ? {
+          date: iso(forward.nextSalary.date),
+          amount: money(forward.nextSalary.amountMinor),
+          name: ctx.tok.tokenize(forward.nextSalary.name) || "Salary",
+        }
+      : null,
+    nextCreditCardDue: forward.nextCardDue
+      ? {
+          date: iso(forward.nextCardDue.date),
+          amount: money(forward.nextCardDue.amountMinor),
+          card: ctx.tok.tokenize(forward.nextCardDue.cardName) || "card",
+        }
+      : null,
+    nextCheque: forward.nextCheque
+      ? {
+          date: iso(forward.nextCheque.date),
+          amount: money(forward.nextCheque.amountMinor),
+          direction: forward.nextCheque.direction,
+          counterparty: ctx.tok.tokenize(forward.nextCheque.counterparty) || "payee",
+        }
+      : null,
+    nextProvision: forward.nextProvision
+      ? {
+          date: iso(forward.nextProvision.date),
+          amount: money(forward.nextProvision.amountMinor),
+          name: ctx.tok.tokenize(forward.nextProvision.name) || "provision",
+        }
+      : null,
+    provisionalPoolAtNextSalary:
+      forward.provisionalPoolAtNextSalaryMinor != null ? money(forward.provisionalPoolAtNextSalaryMinor) : null,
+  };
+}
+
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
 export async function runTool(name: string, args: Record<string, unknown>, ctx: ToolContext): Promise<unknown> {
@@ -390,6 +437,8 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       return getCreditCards(ctx);
     case "list_due_payments":
       return listDuePayments(ctx, args as { daysAhead?: number });
+    case "get_free_savings_pool":
+      return getFreeSavingsPool(ctx);
     case "spending_summary":
       return spendingSummary(ctx, args as { months?: number });
     case "search_transactions":

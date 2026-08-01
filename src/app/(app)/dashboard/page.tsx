@@ -11,20 +11,18 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { getDashboard } from "@/server/queries";
-import { projectSeries } from "@/server/projection-actions";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Money } from "@/components/money";
 import { AddTransactionButton } from "@/components/add-transaction-button";
-import { ProjectionExplorer } from "@/components/dashboard/projection-explorer";
 import { ObligationsList } from "@/components/dashboard/obligations-list";
-import { SalaryPeriodCard } from "@/components/dashboard/salary-period-card";
+import { FreeSavingsPoolCard } from "@/components/dashboard/free-savings-pool-card";
 import { IncomeVsCostsCard } from "@/components/dashboard/income-vs-costs-card";
 import { FreeSavingsExplorer } from "@/components/dashboard/free-savings-explorer";
 import { ACCOUNT_TYPE_LABELS, type AccountType } from "@/lib/domain";
 
 export default async function DashboardPage() {
-  const [dashboard, series] = await Promise.all([getDashboard(90), projectSeries(90)]);
+  const dashboard = await getDashboard(90);
   const {
     accounts,
     netWorthMinor,
@@ -34,9 +32,13 @@ export default async function DashboardPage() {
     runway,
     obligations,
     baseCurrency,
-    salaryPeriod,
+    poolMinor,
+    nextSalary,
+    nextCardDue,
+    nextCheque,
+    nextProvision,
+    provisionalPoolAtNextSalaryMinor,
     timeline,
-    creditCardOwedMinor,
   } = dashboard;
 
   const runwayLabel =
@@ -98,37 +100,33 @@ export default async function DashboardPage() {
             currency={baseCurrency}
           />
         </div>
-        <SalaryPeriodCard
-          period={salaryPeriod}
-          creditCardOwedMinor={creditCardOwedMinor}
+        <FreeSavingsPoolCard
+          poolMinor={poolMinor}
+          nextSalary={nextSalary}
+          nextCardDue={nextCardDue}
+          nextCheque={nextCheque}
+          nextProvision={nextProvision}
+          provisionalPoolAtNextSalaryMinor={provisionalPoolAtNextSalaryMinor}
           currency={baseCurrency}
         />
       </div>
 
       <FreeSavingsExplorer daily={timeline.daily} currency={baseCurrency} />
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <ProjectionExplorer initial={series} currency={baseCurrency} />
-        </div>
-
-        <div className="space-y-4">
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-base">Upcoming obligations</CardTitle>
-              <Link
-                href="/cheques"
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                All <ArrowRight className="h-3 w-3" />
-              </Link>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <ObligationsList items={obligations} limit={7} />
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="text-base">Upcoming obligations</CardTitle>
+          <Link
+            href="/cheques"
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            All <ArrowRight className="h-3 w-3" />
+          </Link>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <ObligationsList items={obligations} limit={7} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-3">
