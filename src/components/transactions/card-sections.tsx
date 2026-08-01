@@ -70,10 +70,12 @@ function StatementDetailsDialog({
   detail,
   currency,
   onClose,
+  onPay,
 }: {
-  detail: { title: string; cardName: string; statement: CardStatementLite } | null;
+  detail: { title: string; cardId: string; cardName: string; statement: CardStatementLite } | null;
   currency: string;
   onClose: () => void;
+  onPay: (preset: { cardId: string; amountMinor: number }) => void;
 }) {
   return (
     <Dialog open={detail != null} onOpenChange={(o) => !o && onClose()}>
@@ -117,8 +119,75 @@ function StatementDetailsDialog({
                 No line items registered for this statement yet.
               </p>
             )}
+            <div className="flex justify-end pt-1">
+              <Button
+                size="sm"
+                disabled={detail.statement.totalAmountDueMinor <= 0}
+                onClick={() => {
+                  onPay({ cardId: detail.cardId, amountMinor: detail.statement.totalAmountDueMinor });
+                  onClose();
+                }}
+              >
+                <ArrowDownToLine className="h-4 w-4" /> Record payment
+              </Button>
+            </div>
           </>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** "Total owed" breakdown across all cards, with a per-card shortcut into payment. */
+function TotalOwedDialog({
+  open,
+  onClose,
+  cards,
+  currency,
+  onPay,
+}: {
+  open: boolean;
+  onClose: () => void;
+  cards: CreditCardLite[];
+  currency: string;
+  onPay: (preset: { cardId: string; amountMinor: number }) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Total owed</DialogTitle>
+          <DialogDescription>What each card owes right now, and what&apos;s due this cycle.</DialogDescription>
+        </DialogHeader>
+        <ul className="divide-y">
+          {cards.map((c) => {
+            const dueThisCycle = c.statements[0]?.totalAmountDueMinor ?? c.owedMinor;
+            return (
+              <li key={c.id} className="flex items-center justify-between gap-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{c.name}</div>
+                  <div className="text-xs text-muted-foreground">
+                    Due this cycle <Money minor={dueThisCycle} currency={currency} showCurrency={false} />
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Money minor={c.owedMinor} currency={currency} className="font-semibold" />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={c.owedMinor <= 0}
+                    onClick={() => {
+                      onPay({ cardId: c.id, amountMinor: dueThisCycle });
+                      onClose();
+                    }}
+                  >
+                    Pay
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       </DialogContent>
     </Dialog>
   );
@@ -166,9 +235,20 @@ export function CreditCardSection({
 }) {
   const [addOpen, setAddOpen] = React.useState(false);
   const [payOpen, setPayOpen] = React.useState(false);
-  const [detail, setDetail] = React.useState<{ title: string; cardName: string; statement: CardStatementLite } | null>(
-    null,
-  );
+  const [payPreset, setPayPreset] = React.useState<{ cardId: string; amountMinor: number } | null>(null);
+  const [detail, setDetail] = React.useState<{
+    title: string;
+    cardId: string;
+    cardName: string;
+    statement: CardStatementLite;
+  } | null>(null);
+  const [owedOpen, setOwedOpen] = React.useState(false);
+
+  function openPay(preset: { cardId: string; amountMinor: number } | null) {
+    setPayPreset(preset);
+    setPayOpen(true);
+  }
+
   const owedMinor = cards.reduce((s, c) => s + c.owedMinor, 0);
   // Total Amount Due this cycle: the sum of each card's current (issued but
   // unpaid) statement bill — index 0 of its upcoming statements.
@@ -185,7 +265,7 @@ export function CreditCardSection({
           <CreditCard className="h-4 w-4 text-[#7c3aed]" /> Credit cards
         </CardTitle>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => setPayOpen(true)} disabled={owedMinor <= 0}>
+          <Button size="sm" variant="outline" onClick={() => openPay(null)} disabled={owedMinor <= 0}>
             <ArrowDownToLine className="h-4 w-4" /> Record payment
           </Button>
           <Button size="sm" onClick={() => setAddOpen(true)}>
@@ -195,7 +275,12 @@ export function CreditCardSection({
       </CardHeader>
       <CardContent className="pt-0">
         <div className="mb-3 grid grid-cols-2 gap-3">
-          <div className="rounded-lg bg-muted/50 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setOwedOpen(true)}
+            disabled={cards.length === 0}
+            className="rounded-lg bg-muted/50 px-4 py-3 text-left transition-colors hover:bg-muted disabled:cursor-default disabled:hover:bg-muted/50"
+          >
             <div className="text-xs text-muted-foreground">
               Total owed{cards.length > 1 ? ` · ${cards.length} cards` : ""}
             </div>
@@ -207,7 +292,7 @@ export function CreditCardSection({
             <div className="mt-0.5 text-xs text-muted-foreground">
               Added this month <Money minor={monthTotal} currency={currency} showCurrency={false} />
             </div>
-          </div>
+          </button>
           <div className="rounded-lg border border-[#7c3aed]/25 bg-[#7c3aed]/5 px-4 py-3">
             <div className="text-xs text-muted-foreground">Total amount due (this cycle)</div>
             <Money minor={dueMinor} currency={currency} className="text-2xl font-bold" />
@@ -248,7 +333,9 @@ export function CreditCardSection({
                   <>
                     <button
                       type="button"
-                      onClick={() => setDetail({ title: "Total amount due", cardName: c.name, statement: current })}
+                      onClick={() =>
+                        setDetail({ title: "Total amount due", cardId: c.id, cardName: c.name, statement: current })
+                      }
                       className="mt-1.5 flex w-full items-end justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-1.5 text-left transition-colors hover:bg-muted"
                     >
                       <div className="text-xs text-muted-foreground">
@@ -275,6 +362,7 @@ export function CreditCardSection({
                               onClick={() =>
                                 setDetail({
                                   title: i === 0 ? "Accumulating this cycle" : "Upcoming cycle",
+                                  cardId: c.id,
                                   cardName: c.name,
                                   statement: s,
                                 })
@@ -338,25 +426,33 @@ export function CreditCardSection({
       </Dialog>
 
       {/* Record payment */}
-      <Dialog open={payOpen} onOpenChange={setPayOpen}>
+      <Dialog
+        open={payOpen}
+        onOpenChange={(o) => {
+          setPayOpen(o);
+          if (!o) setPayPreset(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Record credit-card payment</DialogTitle>
             <DialogDescription>
-              Move money from a funding account to pay down the {formatMoney(owedMinor, currency)}{" "}
-              owed.
+              Move money from a funding account — your free-savings pool — to pay down the card.
             </DialogDescription>
           </DialogHeader>
           <PaymentForm
             accounts={assetAccounts}
             cards={cards}
             currency={currency}
+            initialCardId={payPreset?.cardId}
+            initialAmountMinor={payPreset?.amountMinor}
             onDone={() => setPayOpen(false)}
           />
         </DialogContent>
       </Dialog>
 
-      <StatementDetailsDialog detail={detail} currency={currency} onClose={() => setDetail(null)} />
+      <StatementDetailsDialog detail={detail} currency={currency} onClose={() => setDetail(null)} onPay={openPay} />
+      <TotalOwedDialog open={owedOpen} onClose={() => setOwedOpen(false)} cards={cards} currency={currency} onPay={openPay} />
     </Card>
   );
 }
@@ -375,21 +471,32 @@ function PaymentForm({
   cards,
   currency,
   onDone,
+  initialCardId,
+  initialAmountMinor,
 }: {
   accounts: AccountLite[];
   cards: CreditCardLite[];
   currency: string;
   onDone: () => void;
+  /** Pre-target a specific card — e.g. clicked in from a statement popup. */
+  initialCardId?: string;
+  /** Pre-fill the amount — e.g. that statement's total, current or upcoming cycle. */
+  initialAmountMinor?: number;
 }) {
   const [pending, startTransition] = React.useTransition();
   const [fromAccountId, setFromAccountId] = React.useState(accounts[0]?.id ?? "");
-  // Default to the card carrying the most debt — the one you'd usually pay.
-  const defaultCard = [...cards].sort((a, b) => b.owedMinor - a.owedMinor)[0];
+  // Preset card wins; otherwise default to the card carrying the most debt.
+  const defaultCard =
+    (initialCardId ? cards.find((c) => c.id === initialCardId) : undefined) ??
+    [...cards].sort((a, b) => b.owedMinor - a.owedMinor)[0];
   const [cardId, setCardId] = React.useState(defaultCard?.id ?? "");
   const selectedCard = cards.find((c) => c.id === cardId) ?? defaultCard;
-  const [amount, setAmount] = React.useState(String((defaultCard?.owedMinor ?? 0) / 100));
+  // This cycle's total amount due, not the card's full (possibly multi-cycle) balance.
+  const dueThisCycle = (card: CreditCardLite | undefined) => card?.statements[0]?.totalAmountDueMinor ?? card?.owedMinor ?? 0;
+  const [amount, setAmount] = React.useState(String((initialAmountMinor ?? dueThisCycle(defaultCard)) / 100));
 
-  // Paying more than is owed would push the card into credit — clamp the hint.
+  // Paying more than the full balance owed would push the card into credit —
+  // paying more than just this cycle (to also cover an upcoming one) is fine.
   const value = Number(amount.replace(/,/g, ""));
   const overpay =
     Number.isFinite(value) && selectedCard ? value * 100 > selectedCard.owedMinor : false;
@@ -397,7 +504,7 @@ function PaymentForm({
   function chooseCard(id: string) {
     setCardId(id);
     const card = cards.find((c) => c.id === id);
-    if (card) setAmount(String(card.owedMinor / 100));
+    setAmount(String(dueThisCycle(card) / 100));
   }
 
   function submit(e: React.FormEvent) {
