@@ -3,7 +3,7 @@
 import * as React from "react";
 import { format } from "date-fns";
 import { toast } from "sonner";
-import { CreditCard, Wallet, Plus, ArrowDownToLine } from "lucide-react";
+import { CreditCard, Wallet, Plus, ArrowDownToLine, Receipt } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -64,12 +64,81 @@ function CostList({ rows, empty }: { rows: TxRow[]; empty: string }) {
   );
 }
 
+/** Itemized breakdown behind a clicked statement total — a due bill or the
+ *  currently-accumulating one. */
+function StatementDetailsDialog({
+  detail,
+  currency,
+  onClose,
+}: {
+  detail: { title: string; cardName: string; statement: CardStatementLite } | null;
+  currency: string;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={detail != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        {detail && (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                {detail.title} · {detail.cardName}
+              </DialogTitle>
+              <DialogDescription>
+                Statement {format(detail.statement.statementDate, "d MMM yyyy")} · pay by{" "}
+                {format(detail.statement.paymentDueDate, "d MMM yyyy")}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5">
+              <span className="text-sm text-muted-foreground">Total</span>
+              <Money minor={detail.statement.totalAmountDueMinor} currency={currency} className="text-lg font-bold" />
+            </div>
+            {detail.statement.items.length > 0 ? (
+              <ul className="max-h-[320px] divide-y overflow-y-auto">
+                {detail.statement.items.map((item, i) => (
+                  <li key={i} className="flex items-center justify-between gap-3 py-2 text-sm">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 truncate font-medium">
+                        <span className="truncate">{item.label}</span>
+                        {item.recurring && (
+                          <Badge variant="neutral" className="shrink-0 px-1.5 py-0 text-[10px]">
+                            recurring
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">{format(item.date, "d MMM yyyy")}</div>
+                    </div>
+                    <Money minor={item.amountMinor} currency={currency} className="shrink-0 font-medium" />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                No line items registered for this statement yet.
+              </p>
+            )}
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ── Credit card ───────────────────────────────────────────────────────────────
+
+export interface StatementItem {
+  date: Date;
+  amountMinor: number;
+  label: string;
+  recurring: boolean;
+}
 
 export interface CardStatementLite {
   statementDate: Date;
   paymentDueDate: Date;
   totalAmountDueMinor: number;
+  /** The charges that sum to totalAmountDueMinor — shown in the details popup. */
+  items: StatementItem[];
 }
 
 export interface CreditCardLite {
@@ -97,6 +166,9 @@ export function CreditCardSection({
 }) {
   const [addOpen, setAddOpen] = React.useState(false);
   const [payOpen, setPayOpen] = React.useState(false);
+  const [detail, setDetail] = React.useState<{ title: string; cardName: string; statement: CardStatementLite } | null>(
+    null,
+  );
   const owedMinor = cards.reduce((s, c) => s + c.owedMinor, 0);
   // Total Amount Due this cycle: the sum of each card's current (issued but
   // unpaid) statement bill — index 0 of its upcoming statements.
@@ -174,9 +246,15 @@ export function CreditCardSection({
                 </div>
                 {current ? (
                   <>
-                    <div className="mt-1.5 flex items-end justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setDetail({ title: "Total amount due", cardName: c.name, statement: current })}
+                      className="mt-1.5 flex w-full items-end justify-between gap-3 rounded-md bg-muted/40 px-2.5 py-1.5 text-left transition-colors hover:bg-muted"
+                    >
                       <div className="text-xs text-muted-foreground">
-                        <div className="font-medium text-foreground">Total amount due</div>
+                        <div className="flex items-center gap-1 font-medium text-foreground">
+                          Total amount due <Receipt className="h-3 w-3 opacity-60" />
+                        </div>
                         <div>
                           Statement {format(new Date(current.statementDate), "d MMM")} · pay by{" "}
                           {format(new Date(current.paymentDueDate), "d MMM")}
@@ -187,24 +265,34 @@ export function CreditCardSection({
                         currency={currency}
                         className="text-base font-semibold text-[#7c3aed]"
                       />
-                    </div>
+                    </button>
                     {upcoming.length > 0 && (
                       <ul className="mt-1 space-y-0.5">
-                        {upcoming.slice(0, 3).map((s) => (
-                          <li
-                            key={s.paymentDueDate.getTime()}
-                            className="flex items-center justify-between gap-3 px-2.5 text-xs text-muted-foreground"
-                          >
-                            <span>
-                              Next · statement {format(new Date(s.statementDate), "d MMM")} · pay by{" "}
-                              {format(new Date(s.paymentDueDate), "d MMM")}
-                            </span>
-                            <Money
-                              minor={s.totalAmountDueMinor}
-                              currency={currency}
-                              showCurrency={false}
-                              className="font-medium text-foreground"
-                            />
+                        {upcoming.slice(0, 3).map((s, i) => (
+                          <li key={s.paymentDueDate.getTime()}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDetail({
+                                  title: i === 0 ? "Accumulating this cycle" : "Upcoming cycle",
+                                  cardName: c.name,
+                                  statement: s,
+                                })
+                              }
+                              className="flex w-full items-center justify-between gap-3 rounded px-2.5 py-0.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/60"
+                            >
+                              <span>
+                                {i === 0 ? "Accumulating" : "Next"} · statement{" "}
+                                {format(new Date(s.statementDate), "d MMM")} · pay by{" "}
+                                {format(new Date(s.paymentDueDate), "d MMM")}
+                              </span>
+                              <Money
+                                minor={s.totalAmountDueMinor}
+                                currency={currency}
+                                showCurrency={false}
+                                className="font-medium text-foreground"
+                              />
+                            </button>
                           </li>
                         ))}
                         {upcoming.length > 3 && (
@@ -267,6 +355,8 @@ export function CreditCardSection({
           />
         </DialogContent>
       </Dialog>
+
+      <StatementDetailsDialog detail={detail} currency={currency} onClose={() => setDetail(null)} />
     </Card>
   );
 }
@@ -382,21 +472,28 @@ function PaymentForm({
 
 // ── Debit card ────────────────────────────────────────────────────────────────
 
+export interface DebitCycleLite {
+  cycleStart: Date;
+  spentSinceCycleMinor: number;
+  nextSalaryDate: Date | null;
+  provisionedUntilNextSalaryMinor: number;
+}
+
 export function DebitCardSection({
   rows,
   currency,
   accounts,
   categories,
+  cycle,
 }: {
   rows: TxRow[];
   currency: string;
   accounts: AccountLite[];
   categories: CategoryLite[];
+  /** Null on pages that don't load it (e.g. the income view never renders this section). */
+  cycle: DebitCycleLite | null;
 }) {
   const [addOpen, setAddOpen] = React.useState(false);
-  const monthTotal = rows
-    .filter((r) => new Date(r.date).getMonth() === new Date().getMonth())
-    .reduce((s, r) => s + r.amountMinor, 0);
 
   return (
     <Card className="border-l-4 border-l-primary">
@@ -409,13 +506,26 @@ export function DebitCardSection({
         </Button>
       </CardHeader>
       <CardContent className="pt-0">
-        <div className="mb-3 flex items-end justify-between rounded-lg bg-muted/50 px-4 py-3">
-          <div>
-            <div className="text-xs text-muted-foreground">Spent this month</div>
-            <Money minor={monthTotal} currency={currency} className="text-2xl font-bold" />
+        <div className="mb-3 grid grid-cols-2 gap-3">
+          <div className="rounded-lg bg-muted/50 px-4 py-3">
+            <div className="text-xs text-muted-foreground">
+              Spent since {cycle ? format(cycle.cycleStart, "d MMM") : "last cycle"}
+            </div>
+            <Money minor={cycle?.spentSinceCycleMinor ?? 0} currency={currency} className="text-2xl font-bold" />
+            <div className="mt-0.5 text-xs text-muted-foreground">Since the last confirmed salary</div>
           </div>
-          <div className="text-right text-xs text-muted-foreground">
-            Drawn from your linked accounts
+          <div className="rounded-lg border border-primary/25 bg-primary/5 px-4 py-3">
+            <div className="text-xs text-muted-foreground">
+              Provisioned{cycle?.nextSalaryDate ? ` until ${format(cycle.nextSalaryDate, "d MMM")}` : " (next 30 days)"}
+            </div>
+            <Money
+              minor={cycle?.provisionedUntilNextSalaryMinor ?? 0}
+              currency={currency}
+              className="text-2xl font-bold"
+            />
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              {cycle?.nextSalaryDate ? "Recurring + scheduled, until next salary" : "No salary configured yet"}
+            </div>
           </div>
         </div>
         <CostList rows={rows} empty="No debit-card spend recorded yet." />

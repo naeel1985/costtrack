@@ -38,6 +38,8 @@ export default async function DashboardPage() {
     nextCheque,
     nextProvision,
     provisionalPoolAtNextSalaryMinor,
+    poolDryDate,
+    poolDryAmountMinor,
     timeline,
   } = dashboard;
 
@@ -107,6 +109,8 @@ export default async function DashboardPage() {
           nextCheque={nextCheque}
           nextProvision={nextProvision}
           provisionalPoolAtNextSalaryMinor={provisionalPoolAtNextSalaryMinor}
+          poolDryDate={poolDryDate}
+          poolDryAmountMinor={poolDryAmountMinor}
           currency={baseCurrency}
         />
       </div>

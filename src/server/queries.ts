@@ -361,6 +361,8 @@ export async function loadForwardView(
   nextCheque: NextCheque | null;
   nextProvision: NextProvision | null;
   provisionalPoolAtNextSalaryMinor: number | null;
+  poolDryDate: Date | null;
+  poolDryAmountMinor: number | null;
   timeline: CashflowTimeline;
   creditCardOwedMinor: number;
   savingsMinor: number;
@@ -575,6 +577,13 @@ export async function loadForwardView(
     ? (freeSavingsAt(timeline.daily, differenceInCalendarDays(startOfDay(nextSalary.date), today))?.freeSavingsMinor ?? null)
     : null;
 
+  // The "smart" bit: the first day in the 2-year projection the pool would go
+  // negative if every known salary/income/cost lands as expected. Null means
+  // it stays non-negative across the whole horizon.
+  const dryPoint = timeline.daily.find((p) => p.freeSavingsMinor < 0) ?? null;
+  const poolDryDate = dryPoint ? new Date(dryPoint.t) : null;
+  const poolDryAmountMinor = dryPoint ? dryPoint.freeSavingsMinor : null;
+
   return {
     poolMinor,
     nextSalary,
@@ -582,6 +591,8 @@ export async function loadForwardView(
     nextCheque,
     nextProvision,
     provisionalPoolAtNextSalaryMinor,
+    poolDryDate,
+    poolDryAmountMinor,
     timeline,
     creditCardOwedMinor,
     savingsMinor,
@@ -604,6 +615,8 @@ export interface DashboardData {
   nextCheque: NextCheque | null;
   nextProvision: NextProvision | null;
   provisionalPoolAtNextSalaryMinor: number | null;
+  poolDryDate: Date | null;
+  poolDryAmountMinor: number | null;
   timeline: CashflowTimeline;
   creditCardOwedMinor: number;
   savingsMinor: number;
@@ -646,6 +659,8 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
     nextCheque,
     nextProvision,
     provisionalPoolAtNextSalaryMinor,
+    poolDryDate,
+    poolDryAmountMinor,
     timeline,
     creditCardOwedMinor,
     savingsMinor,
@@ -667,10 +682,108 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
     nextCheque,
     nextProvision,
     provisionalPoolAtNextSalaryMinor,
+    poolDryDate,
+    poolDryAmountMinor,
     timeline,
     creditCardOwedMinor,
     savingsMinor,
   };
+}
+
+export interface DebitCycleSummary {
+  /** Start of the current free-savings cycle (the pool's anchor date). */
+  cycleStart: Date;
+  /** Posted debit/cash spend since cycleStart. */
+  spentSinceCycleMinor: number;
+  /** The salary rule's next occurrence, if one is configured. */
+  nextSalaryDate: Date | null;
+  /** Recurring + scheduled debit/cash costs due between today and nextSalaryDate
+   *  (or, with no salary configured, the next 30 days). */
+  provisionedUntilNextSalaryMinor: number;
+}
+
+/**
+ * The debit-card usage summary for the Costs page: how much has actually left
+ * debit/cash accounts since the free-savings pool's current cycle started, and
+ * how much more is already provisioned (recurring + scheduled) before the next
+ * salary is expected — cheques, provisions and credit-card bills are tracked
+ * elsewhere, so this is scoped to debit/cash spend specifically.
+ */
+export async function getDebitCardCycleSummary(): Promise<DebitCycleSummary> {
+  const { user, dek } = await requireUser();
+  const today = startOfDay(new Date());
+
+  const [poolState, rawSalaryRule, accounts] = await Promise.all([
+    prisma.freeSavingsState.findUnique({ where: { userId: user.id } }),
+    prisma.recurringRule.findFirst({ where: { userId: user.id, type: "income", isSalary: true, isActive: true } }),
+    getAccountsWithBalances(),
+  ]);
+
+  const cycleStart = poolState ? poolState.anchorDate : today;
+  const assetAccountIds = accounts.filter((a) => a.type !== "credit_card" && !a.isSystem).map((a) => a.id);
+
+  let nextSalaryDate: Date | null = null;
+  if (rawSalaryRule) {
+    const rule = decryptRecurring(rawSalaryRule, dek);
+    const occurrences = expandRecurrence(
+      {
+        frequency: rule.frequency as never,
+        interval: rule.interval,
+        startDate: rule.startDate,
+        endDate: rule.endDate,
+        occurrenceCount: rule.occurrenceCount,
+      },
+      today,
+      addMonths(today, 3),
+    );
+    nextSalaryDate = occurrences[0] ?? null;
+  }
+  const horizonEnd = nextSalaryDate ?? addDays(today, 30);
+
+  const [rawSpent, rawRules, rawScheduled] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        userId: user.id,
+        status: "posted",
+        type: "expense",
+        accountId: { in: assetAccountIds },
+        date: { gt: cycleStart },
+      },
+    }),
+    prisma.recurringRule.findMany({
+      where: { userId: user.id, isActive: true, type: "expense", accountId: { in: assetAccountIds } },
+    }),
+    prisma.transaction.findMany({
+      where: {
+        userId: user.id,
+        status: "scheduled",
+        type: "expense",
+        accountId: { in: assetAccountIds },
+        date: { gte: today, lte: horizonEnd },
+      },
+    }),
+  ]);
+
+  const spentSinceCycleMinor = rawSpent.reduce((s, t) => s + decInt(t.amountEnc, dek), 0);
+
+  let provisionedUntilNextSalaryMinor = rawScheduled.reduce((s, t) => s + decInt(t.amountEnc, dek), 0);
+  for (const raw of rawRules) {
+    const r = decryptRecurring(raw, dek);
+    const dates = expandRecurrence(
+      {
+        frequency: r.frequency as never,
+        interval: r.interval,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        occurrenceCount: r.occurrenceCount,
+      },
+      today,
+      horizonEnd,
+    );
+    provisionedUntilNextSalaryMinor += dates.length * r.amountMinor;
+  }
+
+  return { cycleStart, spentSinceCycleMinor, nextSalaryDate, provisionedUntilNextSalaryMinor };
 }
 
 // ── Transactions ──────────────────────────────────────────────────────────────

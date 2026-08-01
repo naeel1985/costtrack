@@ -1,5 +1,5 @@
 import { format } from "date-fns";
-import { Wallet, TrendingUp, CreditCard, FileText, Target } from "lucide-react";
+import { Wallet, TrendingUp, CreditCard, FileText, Target, AlertTriangle, ShieldCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Money } from "@/components/money";
 import type { NextCardDue, NextCheque, NextProvision, NextSalary } from "@/server/queries";
@@ -17,6 +17,8 @@ export function FreeSavingsPoolCard({
   nextCheque,
   nextProvision,
   provisionalPoolAtNextSalaryMinor,
+  poolDryDate,
+  poolDryAmountMinor,
   currency,
 }: {
   poolMinor: number;
@@ -25,6 +27,8 @@ export function FreeSavingsPoolCard({
   nextCheque: NextCheque | null;
   nextProvision: NextProvision | null;
   provisionalPoolAtNextSalaryMinor: number | null;
+  poolDryDate: Date | null;
+  poolDryAmountMinor: number | null;
   currency: string;
 }) {
   const rows: { icon: React.ReactNode; label: string; date: Date; amountMinor: number; positive: boolean }[] = [];
@@ -82,6 +86,30 @@ export function FreeSavingsPoolCard({
             As of {format(new Date(), "d MMM yyyy")} — only changes when a confirmed salary closes a cycle.
           </p>
         </div>
+
+        {poolDryDate ? (
+          <div className="flex items-start gap-2 rounded-lg border border-negative/30 bg-negative/10 px-3 py-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-negative" />
+            <div className="text-xs">
+              <div className="font-medium text-negative">Pool projected to run dry</div>
+              <p className="mt-0.5 text-muted-foreground">
+                If everything known lands as expected, your free savings goes negative around{" "}
+                <span className="font-medium text-foreground">{format(poolDryDate, "d MMM yyyy")}</span>
+                {poolDryAmountMinor != null && (
+                  <>
+                    {" "}
+                    (<Money minor={poolDryAmountMinor} currency={currency} showCurrency={false} />)
+                  </>
+                )}
+                .
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 rounded-lg border border-positive/25 bg-positive/10 px-3 py-2 text-xs text-positive">
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0" /> Projected to stay positive for the next 2 years.
+          </div>
+        )}
 
         {rows.length > 0 ? (
           <ul className="space-y-2 border-t pt-3">

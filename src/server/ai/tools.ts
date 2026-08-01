@@ -93,7 +93,7 @@ export const TOOL_SCHEMAS = [
   {
     name: "get_free_savings_pool",
     description:
-      "The free-savings pool: a cumulative figure that only changes when the user CONFIRMS a salary debit (not a live running balance). Returns the current pool amount, what's next (salary, credit-card due, cheque, provision — each with date and amount), and a provisional pool estimate for the next salary date. Use this for any question about \"free savings\", \"how much can I safely spend\", \"what's left over\", or \"will I be okay next cycle\" — do not derive this from list_accounts balances, which is a different, uncommitted number.",
+      "The free-savings pool: a cumulative figure that only changes when the user CONFIRMS a salary debit (not a live running balance). Returns the current pool amount, what's next (salary, credit-card due, cheque, provision — each with date and amount), a provisional pool estimate for the next salary date, and runsOutOn/runsOutAmount — the first future date (if any, over a 2-year projection) the pool is projected to go negative if everything known lands as expected. Use this for any question about \"free savings\", \"how much can I safely spend\", \"what's left over\", \"will I be okay next cycle\", or \"when will I run out of money\" — do not derive this from list_accounts balances, which is a different, uncommitted number.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
   },
 ] as const;
@@ -424,6 +424,11 @@ async function getFreeSavingsPool(ctx: ToolContext) {
       : null,
     provisionalPoolAtNextSalary:
       forward.provisionalPoolAtNextSalaryMinor != null ? money(forward.provisionalPoolAtNextSalaryMinor) : null,
+    // If runsOutOn is set, the pool is projected to go negative on that date if
+    // everything known (income, cards, cheques, provisions, recurring costs)
+    // lands as expected — this is the "will I be okay" signal.
+    runsOutOn: forward.poolDryDate ? iso(forward.poolDryDate) : null,
+    runsOutAmount: forward.poolDryAmountMinor != null ? money(forward.poolDryAmountMinor) : null,
   };
 }
 
