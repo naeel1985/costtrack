@@ -5,14 +5,14 @@
 // statement:
 //
 //   • Payment due date — the day of the month (`dueDay`) the bill must be paid.
-//   • Statement date   — when that bill is ISSUED. It sits 5 days after the
+//   • Statement date   — when that bill is ISSUED. It sits 6 days after the
 //                        PREVIOUS month's payment due date. So for a due date of
-//                        3 Jul, the statement was issued on 8 Jun (3 Jun + 5).
+//                        2 Aug, the statement was issued on 8 Jul (2 Jul + 6).
 //
 // A statement bills every card charge registered between the previous statement
 // date and this one — the window (prevStatement, thisStatement] — and that total
-// is paid on the payment due date. Example (due day 3): the statement issued
-// 8 Jul covers charges from 9 Jun to 8 Jul and is paid on 3 Aug.
+// is paid on the payment due date. Example (due day 2, user's real card): the
+// statement issued 8 Jul covers charges from 9 Jun to 8 Jul and is paid on 2 Aug.
 //
 // So a charge waits for the next statement to close, then ~25 more days for the
 // payment date — that lag is when the money finally leaves free savings, which
@@ -25,7 +25,7 @@ import { addDays, addMonths, getDaysInMonth, isAfter, setDate, startOfDay, subMo
 import type { DatedAmount } from "./cashflow-timeline";
 
 /** A statement is issued this many days after the previous month's due date. */
-export const STATEMENT_LEAD_DAYS = 5;
+export const STATEMENT_LEAD_DAYS = 6;
 
 export interface CardBillInput {
   /** Day of the month the bill falls due (1–31). */

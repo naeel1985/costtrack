@@ -24,12 +24,12 @@ describe("dueDateIn", () => {
 });
 
 describe("statementDateForDue", () => {
-  it("is 5 days after the previous month's due date (user example: due 3 Jul -> stmt 8 Jun)", () => {
-    expect(ymd(statementDateForDue(d("2026-07-03"), 3))).toBe("2026-06-08");
+  it("is 6 days after the previous month's due date (due 3 Jul -> stmt 9 Jun)", () => {
+    expect(ymd(statementDateForDue(d("2026-07-03"), 3))).toBe("2026-06-09");
   });
 
-  it("issues the 8 Jul statement for the 3 Aug payment (user example)", () => {
-    expect(ymd(statementDateForDue(d("2026-08-03"), 3))).toBe("2026-07-08");
+  it("issues the 9 Jul statement for the 3 Aug payment (matches the user's real due-day-2 card: due 2 Aug -> stmt 8 Jul)", () => {
+    expect(ymd(statementDateForDue(d("2026-08-03"), 3))).toBe("2026-07-09");
   });
 
   it("round-trips with dueDateForStatement", () => {
@@ -40,10 +40,10 @@ describe("statementDateForDue", () => {
 
 describe("dueDateForCharge", () => {
   it("bills a charge on the payment date of the statement that closes after it", () => {
-    // Statement 8 Jul covers 9 Jun..8 Jul and is paid 3 Aug.
+    // Statement 9 Jul covers 10 Jun..9 Jul and is paid 3 Aug.
     expect(ymd(dueDateForCharge(d("2026-06-20"), 3))).toBe("2026-08-03");
-    expect(ymd(dueDateForCharge(d("2026-07-08"), 3))).toBe("2026-08-03"); // boundary: on the statement date
-    expect(ymd(dueDateForCharge(d("2026-07-09"), 3))).toBe("2026-09-03"); // just after -> next statement
+    expect(ymd(dueDateForCharge(d("2026-07-09"), 3))).toBe("2026-08-03"); // boundary: on the statement date
+    expect(ymd(dueDateForCharge(d("2026-07-10"), 3))).toBe("2026-09-03"); // just after -> next statement
   });
 });
 
@@ -57,7 +57,7 @@ describe("cardCycleBills", () => {
     expect(ymd(bills[0].date)).toBe("2026-06-03");
   });
 
-  it("bills a mid-window charge on the matching payment date (9 Jun–8 Jul -> 3 Aug)", () => {
+  it("bills a mid-window charge on the matching payment date (10 Jun–9 Jul -> 3 Aug)", () => {
     const bills = cardCycleBills(
       { dueDay: 3, owedNowMinor: 0, charges: [{ date: d("2026-06-20"), amountMinor: aed(500) }] },
       from,
@@ -74,8 +74,8 @@ describe("cardCycleBills", () => {
         dueDay: 3,
         owedNowMinor: 0,
         charges: [
-          { date: d("2026-07-08"), amountMinor: aed(400) }, // statement 8 Jul -> 3 Aug
-          { date: d("2026-07-09"), amountMinor: aed(600) }, // statement 8 Aug -> 3 Sep
+          { date: d("2026-07-09"), amountMinor: aed(400) }, // statement 9 Jul -> 3 Aug
+          { date: d("2026-07-10"), amountMinor: aed(600) }, // statement 9 Aug -> 3 Sep
         ],
       },
       from,
@@ -138,8 +138,8 @@ describe("cardCycleBills", () => {
 
 describe("nextStatement", () => {
   it("reports the statement date, payment due date and total due for the window", () => {
-    // today 20 Jun, due day 3 -> next payment 3 Jul, its statement 8 Jun,
-    // window (8 May, 8 Jun]. A charge on 1 Jun is in it; one on 20 Jun is not.
+    // today 20 Jun, due day 3 -> next payment 3 Jul, its statement 9 Jun,
+    // window (9 May, 9 Jun]. A charge on 1 Jun is in it; one on 20 Jun is not.
     const s = nextStatement(
       3,
       0,
@@ -151,7 +151,7 @@ describe("nextStatement", () => {
     );
     expect(s).not.toBeNull();
     expect(ymd(s!.paymentDueDate)).toBe("2026-07-03");
-    expect(ymd(s!.statementDate)).toBe("2026-06-08");
+    expect(ymd(s!.statementDate)).toBe("2026-06-09");
     expect(s!.totalAmountDueMinor).toBe(aed(700));
   });
 
