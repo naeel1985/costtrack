@@ -47,7 +47,7 @@ import {
   type CashflowTimeline,
   type DatedAmount,
 } from "@/lib/cashflow-timeline";
-import { cardCycleBills, nextDueDate, nextStatement, statementDateForDue } from "@/lib/card-cycle";
+import { upcomingStatements } from "@/lib/card-cycle";
 import {
   buildNotifications,
   type NotificationItem,
@@ -449,8 +449,8 @@ export async function loadForwardView(
     );
   const expand = (r: (typeof rules)[number]) => expandFrom(r, today);
   // Card charges reach back two months so a recurring occurrence dated before
-  // today but still billing on the current statement is picked up; cardCycleBills
-  // drops any that would land on an already-past due date.
+  // today but still billing on the current statement is picked up; the statement
+  // builder drops any that would land on an already-past due date.
   const cardChargeWindowStart = subMonths(today, 2);
 
   // Salary is the ONE explicitly-flagged income rule (see RecurringRule.isSalary).
@@ -523,28 +523,26 @@ export async function loadForwardView(
   for (const card of cards) {
     const dueDay = card.dueDay!;
     const owedNow = Math.max(0, -card.balanceMinor);
-    // Posted spend dated after the current statement closes belongs to a later
-    // cycle. It sits in the balance, so pull it out of the current-cycle lump and
-    // bill it by its own date instead (same rule as the Costs page statements).
-    const thisStatement = statementDateForDue(nextDueDate(today, dueDay), dueDay).getTime();
-    const posted = postedByCard.get(card.id) ?? [];
-    const futurePosted = posted.filter((c) => startOfDay(c.date).getTime() > thisStatement);
-    const futurePostedSum = futurePosted.reduce((s, c) => s + Math.max(0, c.amountMinor), 0);
-    const allCharges = [...(cardCharges.get(card.id) ?? []), ...futurePosted];
-
-    const bills = cardCycleBills(
-      {
-        dueDay,
-        owedNowMinor: Math.max(0, owedNow - futurePostedSum),
-        charges: allCharges,
-      },
+    // One statement series drives all three readings — the pool projection, the
+    // dashboard's "next due", and the Costs page — so they can never disagree.
+    // It is payment-aware: a settled cycle bills 0 and any overpayment credits
+    // the next one.
+    const statements = upcomingStatements(
+      dueDay,
+      owedNow,
+      postedByCard.get(card.id) ?? [],
+      cardCharges.get(card.id) ?? [],
       today,
       windowEnd,
     );
+    const bills = statements
+      .filter((s) => s.totalAmountDueMinor > 0)
+      .map((s) => ({ date: s.paymentDueDate, amountMinor: s.totalAmountDueMinor }));
     costEvents.push(...bills);
     cardBillEvents.push(...bills);
 
-    const stmt = nextStatement(dueDay, owedNow, allCharges, today);
+    // Skip cycles already paid off — the next bill is the next one owing.
+    const stmt = statements.find((s) => s.totalAmountDueMinor > 0);
     if (stmt && (!nextCardDue || stmt.paymentDueDate < nextCardDue.date)) {
       nextCardDue = { date: stmt.paymentDueDate, amountMinor: stmt.totalAmountDueMinor, cardName: card.name };
     }

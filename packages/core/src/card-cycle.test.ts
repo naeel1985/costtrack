@@ -5,6 +5,7 @@ import {
   dueDateForStatement,
   dueDateIn,
   nextDueDate,
+  nextDueStatement,
   nextStatement,
   statementDateForDue,
   upcomingStatements,
@@ -138,11 +139,12 @@ describe("cardCycleBills", () => {
 
 describe("nextStatement", () => {
   it("reports the statement date, payment due date and total due for the window", () => {
-    // today 20 Jun, due day 3 -> next payment 3 Jul, its statement 9 Jun,
-    // window (9 May, 9 Jun]. A charge on 1 Jun is in it; one on 20 Jun is not.
+    // today 20 Jun, due day 3 -> next payment 3 Jul, its statement 9 Jun.
+    // A charge on 1 Jun is billed now; one on 20 Jun belongs to a later cycle.
+    // Both are posted, so the balance carries both (700 + 999).
     const s = nextStatement(
       3,
-      0,
+      aed(1_699),
       [
         { date: d("2026-06-01"), amountMinor: aed(700) },
         { date: d("2026-06-20"), amountMinor: aed(999) },
@@ -155,9 +157,21 @@ describe("nextStatement", () => {
     expect(s!.totalAmountDueMinor).toBe(aed(700));
   });
 
-  it("never understates what's owed", () => {
+  it("never understates carried-over debt", () => {
     const s = nextStatement(3, aed(5_000), [], d("2026-06-20"));
     expect(s!.totalAmountDueMinor).toBe(aed(5_000));
+  });
+
+  it("reports 0 once the current bill is settled, rather than the residual balance", () => {
+    // Balance 2,601.62 is entirely next cycle's spend (a later-dated charge);
+    // this cycle is paid off, so nothing is payable now.
+    const s = nextStatement(
+      2,
+      aed(2_601.62),
+      [{ date: d("2026-07-20"), amountMinor: aed(2_647.56) }],
+      d("2026-08-02"),
+    );
+    expect(s!.totalAmountDueMinor).toBe(0);
   });
 
   it("returns null without a due day", () => {
@@ -239,5 +253,50 @@ describe("upcomingStatements", () => {
 
   it("returns nothing without a usable due day", () => {
     expect(upcomingStatements(0, aed(100), [], [], today, horizon)).toEqual([]);
+  });
+
+  // Real reported case: due day 2. Window 9 Jun–8 Jul billed 4,754.06 on 2 Aug;
+  // window 9 Jul–8 Aug has accrued 2,647.56 for 2 Sep. The 2 Aug bill was paid
+  // with 4,800 — so 2 Aug must read 0 and the 45.94 surplus must credit 2 Sep.
+  it("zeroes a settled cycle and carries the overpayment into the next", () => {
+    const posted = [
+      { date: d("2026-06-20"), amountMinor: aed(4_754.06) },
+      { date: d("2026-07-20"), amountMinor: aed(2_647.56) },
+    ];
+    const owedNow = aed(4_754.06) + aed(2_647.56) - aed(4_800);
+    const statements = upcomingStatements(2, owedNow, posted, [], d("2026-08-02"), d("2027-08-02"));
+    expect(statements.map((s) => [ymd(s.paymentDueDate), s.totalAmountDueMinor])).toEqual([
+      ["2026-08-02", 0],
+      ["2026-09-02", aed(2_601.62)], // 2,647.56 - 45.94 credit
+    ]);
+  });
+
+  it("spends a large credit across several following cycles", () => {
+    // Paid 1,000 against a 100 bill; the 900 surplus clears the next two 400s.
+    const posted = [
+      { date: d("2026-06-20"), amountMinor: aed(100) },
+      { date: d("2026-07-20"), amountMinor: aed(400) },
+      { date: d("2026-08-20"), amountMinor: aed(400) },
+    ];
+    const owedNow = aed(100) + aed(400) + aed(400) - aed(1_000);
+    const statements = upcomingStatements(2, owedNow, posted, [], d("2026-08-02"), d("2027-08-02"));
+    expect(statements.every((s) => s.totalAmountDueMinor === 0)).toBe(true);
+  });
+});
+
+describe("nextDueStatement", () => {
+  it("skips a paid-off cycle and points at the next bill actually owing", () => {
+    const posted = [
+      { date: d("2026-06-20"), amountMinor: aed(4_754.06) },
+      { date: d("2026-07-20"), amountMinor: aed(2_647.56) },
+    ];
+    const owedNow = aed(4_754.06) + aed(2_647.56) - aed(4_800);
+    const s = nextDueStatement(2, owedNow, posted, [], d("2026-08-02"), d("2027-08-02"));
+    expect(ymd(s!.paymentDueDate)).toBe("2026-09-02");
+    expect(s!.totalAmountDueMinor).toBe(aed(2_601.62));
+  });
+
+  it("is null when nothing is owed anywhere in the horizon", () => {
+    expect(nextDueStatement(2, 0, [], [], d("2026-08-02"), d("2027-08-02"))).toBeNull();
   });
 });

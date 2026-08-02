@@ -130,10 +130,16 @@ export interface StatementSummary {
 }
 
 /**
- * The next upcoming statement for display: its statement date, payment due date,
- * and Total Amount Due (the charges registered in its window). `charges` should
- * be the card's registered (posted) charges; `owedNowMinor` is folded onto the
- * first payment so the figure never understates what's payable.
+ * The current (issued) statement: its statement date, payment due date, and what
+ * is STILL payable on it. `charges` should be the card's registered (posted)
+ * charges.
+ *
+ * The balance is the source of truth because it is payment-aware, while the
+ * charge list is not — a paid-off bill still has all its charges on record. So
+ * the current bill is the balance MINUS the charges that belong to later cycles
+ * (dated after this statement closes), never the raw sum of this window. Once
+ * the bill is settled this returns 0; use `nextDueStatement` to find the next
+ * cycle that actually has something to pay.
  */
 export function nextStatement(
   dueDay: number,
@@ -145,19 +151,19 @@ export function nextStatement(
   const now = startOfDay(today);
   const paymentDueDate = nextDueDate(now, dueDay);
   const thisStatement = statementDateForDue(paymentDueDate, dueDay);
-  const prevStatement = statementDateForDue(dueDateIn(subMonths(paymentDueDate, 1), dueDay), dueDay);
 
-  const windowTotal = charges.reduce((sum, c) => {
-    const d = startOfDay(c.date).getTime();
-    return d > prevStatement.getTime() && d <= thisStatement.getTime()
-      ? sum + Math.max(0, c.amountMinor)
-      : sum;
-  }, 0);
+  // Charges dated after this statement closes are billed on a later due date;
+  // they sit in the balance but are not payable now.
+  const laterSum = charges.reduce(
+    (sum, c) =>
+      isAfter(startOfDay(c.date), thisStatement) ? sum + Math.max(0, c.amountMinor) : sum,
+    0,
+  );
 
   return {
     statementDate: thisStatement,
     paymentDueDate,
-    totalAmountDueMinor: Math.max(windowTotal, Math.max(0, owedNowMinor)),
+    totalAmountDueMinor: Math.max(0, Math.max(0, owedNowMinor) - laterSum),
   };
 }
 
@@ -194,7 +200,11 @@ export function upcomingStatements(
 
   // The current statement (plus any overdue carry) = the balance minus those
   // not-yet-billed future charges. Balance is payment-aware, so this is too.
-  const currentBaseMinor = Math.max(0, Math.max(0, owedNowMinor) - futurePostedSum);
+  // If it goes negative the bill was OVERPAID; that surplus is a credit on the
+  // card which settles later cycles, so carry it forward rather than losing it.
+  const currentResidual = Math.max(0, owedNowMinor) - futurePostedSum;
+  const currentBaseMinor = Math.max(0, currentResidual);
+  let creditMinor = Math.max(0, -currentResidual);
 
   const byDue = new Map<number, StatementSummary>();
   const put = (s: StatementSummary) => {
@@ -224,5 +234,41 @@ export function upcomingStatements(
     });
   }
 
-  return [...byDue.values()].sort((a, b) => a.paymentDueDate.getTime() - b.paymentDueDate.getTime());
+  const statements = [...byDue.values()].sort(
+    (a, b) => a.paymentDueDate.getTime() - b.paymentDueDate.getTime(),
+  );
+
+  // Spend any overpayment credit against the earliest cycles first.
+  for (const s of statements) {
+    if (creditMinor <= 0) break;
+    const applied = Math.min(creditMinor, s.totalAmountDueMinor);
+    s.totalAmountDueMinor -= applied;
+    creditMinor -= applied;
+  }
+
+  return statements;
+}
+
+/**
+ * The next statement that actually has something to pay — skipping cycles
+ * already settled. A card paid off on its due date should point at the NEXT
+ * bill, not report today's zeroed one.
+ */
+export function nextDueStatement(
+  dueDay: number,
+  owedNowMinor: number,
+  postedCharges: DatedAmount[],
+  futureCharges: DatedAmount[],
+  today: Date,
+  horizon: Date,
+): StatementSummary | null {
+  const statements = upcomingStatements(
+    dueDay,
+    owedNowMinor,
+    postedCharges,
+    futureCharges,
+    today,
+    horizon,
+  );
+  return statements.find((s) => s.totalAmountDueMinor > 0) ?? null;
 }

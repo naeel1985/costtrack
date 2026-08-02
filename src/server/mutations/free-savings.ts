@@ -3,7 +3,7 @@ import { startOfDay } from "date-fns";
 import { prisma } from "@/lib/db";
 import { decryptAccount, decryptTransaction, encInt, decInt } from "@/server/crypto-map";
 import { computeBalances } from "@/server/balances";
-import { nextStatement } from "@/lib/card-cycle";
+import { nextDueStatement } from "@/lib/card-cycle";
 import { realizeCycle } from "@/lib/free-savings-pool";
 import type { DatedAmount } from "@/lib/cashflow-timeline";
 import type { AuthContext } from "@/server/auth";
@@ -79,11 +79,13 @@ export async function realizeSalaryCycle(auth: AuthContext, ruleId: string, cycl
     for (const card of cards) {
       const rawCardCharges = allTx.filter((t) => t.type === "expense" && t.accountId === card.id);
       const owedNow = Math.max(0, -(balances[card.id] ?? 0));
-      const stmt = nextStatement(
+      const stmt = nextDueStatement(
         card.dueDay!,
         owedNow,
         rawCardCharges.map((t) => ({ date: t.date, amountMinor: t.amountMinor })),
+        [],
         cycleStart,
+        cycleEnd,
       );
       if (stmt && stmt.paymentDueDate > cycleStart && stmt.paymentDueDate <= cycleEnd && stmt.totalAmountDueMinor > 0) {
         cardCostEvents.push({ date: stmt.paymentDueDate, amountMinor: stmt.totalAmountDueMinor });

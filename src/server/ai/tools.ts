@@ -7,7 +7,7 @@ import "server-only";
 // Amounts are returned in major units (e.g. AED), dates as yyyy-MM-dd.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { addDays, endOfDay, format, startOfDay, subMonths } from "date-fns";
+import { addDays, addMonths, endOfDay, format, startOfDay, subMonths } from "date-fns";
 import { prisma } from "@/lib/db";
 import {
   decryptAccount,
@@ -19,7 +19,7 @@ import {
 } from "@/server/crypto-map";
 import { computeBalances } from "@/server/balances";
 import { expandRecurrence } from "@/lib/projection";
-import { nextStatement } from "@/lib/card-cycle";
+import { nextDueStatement } from "@/lib/card-cycle";
 import { loadForwardView } from "@/server/queries";
 import { buildTokenizer, type Tokenizer } from "./tokenizer";
 
@@ -161,7 +161,9 @@ async function getCreditCards(ctx: ToolContext) {
       const owed = Math.max(0, -c.balanceMinor);
       const limit = c.creditLimitMinor ?? null;
       const stmt =
-        c.dueDay != null ? nextStatement(c.dueDay, owed, chargesByCard.get(c.id) ?? [], today) : null;
+        c.dueDay != null
+          ? nextDueStatement(c.dueDay, owed, chargesByCard.get(c.id) ?? [], [], today, addMonths(today, 12))
+          : null;
       return {
         ref: ctx.tok.tokenForAccount(c.id),
         currency: c.currency,
@@ -207,7 +209,7 @@ async function listDuePayments(ctx: ToolContext, args: { daysAhead?: number }) {
     }
     for (const c of cards) {
       const owed = Math.max(0, -c.balanceMinor);
-      const stmt = nextStatement(c.dueDay!, owed, chargesByCard.get(c.id) ?? [], today);
+      const stmt = nextDueStatement(c.dueDay!, owed, chargesByCard.get(c.id) ?? [], [], today, end);
       if (stmt && stmt.paymentDueDate <= end && stmt.totalAmountDueMinor > 0) {
         payments.push({
           date: iso(stmt.paymentDueDate),
