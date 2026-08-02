@@ -140,29 +140,68 @@ async function listAccounts(ctx: ToolContext) {
   };
 }
 
+type CardActivity = Map<string, { date: Date; amountMinor: number }[]>;
+
+/**
+ * Posted charges and payments per card. A payment is a transfer INTO the card,
+ * so it keys off transferAccountId — statements can't be settled without it.
+ */
+async function loadCardActivity(
+  ctx: ToolContext,
+  cardIds: string[],
+): Promise<{ charges: CardActivity; payments: CardActivity }> {
+  const charges: CardActivity = new Map();
+  const payments: CardActivity = new Map();
+  if (cardIds.length === 0) return { charges, payments };
+
+  const rawTx = await prisma.transaction.findMany({
+    where: {
+      userId: ctx.userId,
+      status: "posted",
+      OR: [
+        { type: "expense", accountId: { in: cardIds } },
+        { type: "transfer", transferAccountId: { in: cardIds } },
+      ],
+    },
+  });
+  for (const raw of rawTx) {
+    const t = decryptTransaction(raw, ctx.dek);
+    const isPayment = t.type === "transfer";
+    const cardId = isPayment ? t.transferAccountId : t.accountId;
+    if (!cardId) continue;
+    const target = isPayment ? payments : charges;
+    const list = target.get(cardId) ?? [];
+    list.push({ date: t.date, amountMinor: t.amountMinor });
+    target.set(cardId, list);
+  }
+  return { charges, payments };
+}
+
 async function getCreditCards(ctx: ToolContext) {
   const accounts = await loadAccountsWithBalances(ctx);
   const cards = accounts.filter((a) => a.type === "credit_card");
   const today = new Date();
 
-  const rawTx = await prisma.transaction.findMany({
-    where: { userId: ctx.userId, status: "posted", type: "expense", accountId: { in: cards.map((c) => c.id) } },
-  });
-  const chargesByCard = new Map<string, { date: Date; amountMinor: number }[]>();
-  for (const raw of rawTx) {
-    const t = decryptTransaction(raw, ctx.dek);
-    const list = chargesByCard.get(t.accountId) ?? [];
-    list.push({ date: t.date, amountMinor: t.amountMinor });
-    chargesByCard.set(t.accountId, list);
-  }
+  const { charges: chargesByCard, payments: paymentsByCard } = await loadCardActivity(
+    ctx,
+    cards.map((c) => c.id),
+  );
 
   return {
     cards: cards.map((c) => {
-      const owed = Math.max(0, -c.balanceMinor);
+      const owed = -c.balanceMinor; // signed: negative when in credit
       const limit = c.creditLimitMinor ?? null;
       const stmt =
         c.dueDay != null
-          ? nextDueStatement(c.dueDay, owed, chargesByCard.get(c.id) ?? [], [], today, addMonths(today, 12))
+          ? nextDueStatement(
+              c.dueDay,
+              owed,
+              chargesByCard.get(c.id) ?? [],
+              [],
+              paymentsByCard.get(c.id) ?? [],
+              today,
+              addMonths(today, 12),
+            )
           : null;
       return {
         ref: ctx.tok.tokenForAccount(c.id),
@@ -197,23 +236,26 @@ async function listDuePayments(ctx: ToolContext, args: { daysAhead?: number }) {
   // Credit-card statement payments.
   const cards = accounts.filter((a) => a.type === "credit_card" && a.dueDay != null);
   if (cards.length) {
-    const rawTx = await prisma.transaction.findMany({
-      where: { userId: ctx.userId, status: "posted", type: "expense", accountId: { in: cards.map((c) => c.id) } },
-    });
-    const chargesByCard = new Map<string, { date: Date; amountMinor: number }[]>();
-    for (const raw of rawTx) {
-      const t = decryptTransaction(raw, ctx.dek);
-      const list = chargesByCard.get(t.accountId) ?? [];
-      list.push({ date: t.date, amountMinor: t.amountMinor });
-      chargesByCard.set(t.accountId, list);
-    }
+    const { charges: chargesByCard, payments: paymentsByCard } = await loadCardActivity(
+      ctx,
+      cards.map((c) => c.id),
+    );
     for (const c of cards) {
-      const owed = Math.max(0, -c.balanceMinor);
-      const stmt = nextDueStatement(c.dueDay!, owed, chargesByCard.get(c.id) ?? [], [], today, end);
-      if (stmt && stmt.paymentDueDate <= end && stmt.totalAmountDueMinor > 0) {
+      const owed = -c.balanceMinor; // signed: negative when in credit
+      const stmt = nextDueStatement(
+        c.dueDay!,
+        owed,
+        chargesByCard.get(c.id) ?? [],
+        [],
+        paymentsByCard.get(c.id) ?? [],
+        today,
+        end,
+      );
+      // Only the unpaid remainder is still an upcoming payment.
+      if (stmt && stmt.paymentDueDate <= end && stmt.remainingMinor > 0) {
         payments.push({
           date: iso(stmt.paymentDueDate),
-          amount: money(stmt.totalAmountDueMinor),
+          amount: money(stmt.remainingMinor),
           currency: c.currency,
           kind: "credit_card_payment",
           ref: ctx.tok.tokenForAccount(c.id),

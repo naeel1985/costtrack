@@ -91,9 +91,29 @@ function StatementDetailsDialog({
                 {format(detail.statement.paymentDueDate, "d MMM yyyy")}
               </DialogDescription>
             </DialogHeader>
-            <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5">
-              <span className="text-sm text-muted-foreground">Total</span>
-              <Money minor={detail.statement.totalAmountDueMinor} currency={currency} className="text-lg font-bold" />
+            <div className="space-y-1.5 rounded-lg bg-muted/50 px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Total amount due</span>
+                <Money minor={detail.statement.totalAmountDueMinor} currency={currency} className="text-lg font-bold" />
+              </div>
+              {detail.statement.paidMinor > 0 && (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Paid</span>
+                    <span className="font-medium text-positive">
+                      −<Money minor={detail.statement.paidMinor} currency={currency} showCurrency={false} />
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between border-t pt-1.5 text-sm">
+                    <span className="text-muted-foreground">Remaining</span>
+                    <Money
+                      minor={detail.statement.remainingMinor}
+                      currency={currency}
+                      className="font-semibold"
+                    />
+                  </div>
+                </>
+              )}
             </div>
             {detail.statement.items.length > 0 ? (
               <ul className="max-h-[320px] divide-y overflow-y-auto">
@@ -122,9 +142,9 @@ function StatementDetailsDialog({
             <div className="flex justify-end pt-1">
               <Button
                 size="sm"
-                disabled={detail.statement.totalAmountDueMinor <= 0}
+                disabled={detail.statement.remainingMinor <= 0}
                 onClick={() => {
-                  onPay({ cardId: detail.cardId, amountMinor: detail.statement.totalAmountDueMinor });
+                  onPay({ cardId: detail.cardId, amountMinor: detail.statement.remainingMinor });
                   onClose();
                 }}
               >
@@ -161,7 +181,7 @@ function TotalOwedDialog({
         </DialogHeader>
         <ul className="divide-y">
           {cards.map((c) => {
-            const dueThisCycle = c.statements[0]?.totalAmountDueMinor ?? c.owedMinor;
+            const dueThisCycle = c.statements[0]?.remainingMinor ?? c.owedMinor;
             return (
               <li key={c.id} className="flex items-center justify-between gap-3 py-2.5">
                 <div className="min-w-0">
@@ -205,7 +225,12 @@ export interface StatementItem {
 export interface CardStatementLite {
   statementDate: Date;
   paymentDueDate: Date;
+  /** What the bill says — always the sum of `items`, whether or not it's paid. */
   totalAmountDueMinor: number;
+  broughtForwardMinor: number;
+  paidMinor: number;
+  /** Still payable after payments settled against this bill. */
+  remainingMinor: number;
   /** The charges that sum to totalAmountDueMinor — shown in the details popup. */
   items: StatementItem[];
 }
@@ -250,9 +275,10 @@ export function CreditCardSection({
   }
 
   const owedMinor = cards.reduce((s, c) => s + c.owedMinor, 0);
-  // Total Amount Due this cycle: the sum of each card's current (issued but
-  // unpaid) statement bill — index 0 of its upcoming statements.
+  // This cycle's bills, and what's still payable on them after payments.
   const dueMinor = cards.reduce((s, c) => s + (c.statements[0]?.totalAmountDueMinor ?? 0), 0);
+  const remainingMinor = cards.reduce((s, c) => s + (c.statements[0]?.remainingMinor ?? 0), 0);
+  const settledMinor = dueMinor - remainingMinor;
   const hasStatements = cards.some((c) => c.statements.length > 0);
   const monthTotal = rows
     .filter((r) => new Date(r.date).getMonth() === new Date().getMonth())
@@ -297,7 +323,22 @@ export function CreditCardSection({
             <div className="text-xs text-muted-foreground">Total amount due (this cycle)</div>
             <Money minor={dueMinor} currency={currency} className="text-2xl font-bold" />
             <div className="mt-0.5 text-xs text-muted-foreground">
-              {hasStatements ? "Current issued statements" : "Set due days to bill statements"}
+              {!hasStatements ? (
+                "Set due days to bill statements"
+              ) : settledMinor > 0 ? (
+                <>
+                  Paid <Money minor={settledMinor} currency={currency} showCurrency={false} /> ·{" "}
+                  {remainingMinor > 0 ? (
+                    <>
+                      <Money minor={remainingMinor} currency={currency} showCurrency={false} /> left
+                    </>
+                  ) : (
+                    <span className="text-positive">settled</span>
+                  )}
+                </>
+              ) : (
+                "Current issued statements"
+              )}
             </div>
           </div>
         </div>
@@ -347,11 +388,24 @@ export function CreditCardSection({
                           {format(new Date(current.paymentDueDate), "d MMM")}
                         </div>
                       </div>
-                      <Money
-                        minor={current.totalAmountDueMinor}
-                        currency={currency}
-                        className="text-base font-semibold text-[#7c3aed]"
-                      />
+                      <span className="flex flex-col items-end">
+                        <Money
+                          minor={current.totalAmountDueMinor}
+                          currency={currency}
+                          className="text-base font-semibold text-[#7c3aed]"
+                        />
+                        {current.paidMinor > 0 && (
+                          <span className="text-[11px] text-muted-foreground">
+                            {current.remainingMinor > 0 ? (
+                              <>
+                                <Money minor={current.remainingMinor} currency={currency} showCurrency={false} /> left
+                              </>
+                            ) : (
+                              <span className="text-positive">paid in full</span>
+                            )}
+                          </span>
+                        )}
+                      </span>
                     </button>
                     {upcoming.length > 0 && (
                       <ul className="mt-1 space-y-0.5">
@@ -492,7 +546,7 @@ function PaymentForm({
   const [cardId, setCardId] = React.useState(defaultCard?.id ?? "");
   const selectedCard = cards.find((c) => c.id === cardId) ?? defaultCard;
   // This cycle's total amount due, not the card's full (possibly multi-cycle) balance.
-  const dueThisCycle = (card: CreditCardLite | undefined) => card?.statements[0]?.totalAmountDueMinor ?? card?.owedMinor ?? 0;
+  const dueThisCycle = (card: CreditCardLite | undefined) => card?.statements[0]?.remainingMinor ?? card?.owedMinor ?? 0;
   const [amount, setAmount] = React.useState(String((initialAmountMinor ?? dueThisCycle(defaultCard)) / 100));
 
   // Paying more than the full balance owed would push the card into credit —

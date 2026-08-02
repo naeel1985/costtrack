@@ -78,17 +78,23 @@ export async function realizeSalaryCycle(auth: AuthContext, ruleId: string, cycl
     const balances = computeBalances(accounts, allTx);
     for (const card of cards) {
       const rawCardCharges = allTx.filter((t) => t.type === "expense" && t.accountId === card.id);
-      const owedNow = Math.max(0, -(balances[card.id] ?? 0));
+      // Payments are transfers INTO the card; without them a settled statement
+      // would be charged against the pool a second time.
+      const rawCardPayments = allTx.filter(
+        (t) => t.type === "transfer" && t.transferAccountId === card.id,
+      );
+      const owedNow = -(balances[card.id] ?? 0); // signed: negative when in credit
       const stmt = nextDueStatement(
         card.dueDay!,
         owedNow,
         rawCardCharges.map((t) => ({ date: t.date, amountMinor: t.amountMinor })),
         [],
+        rawCardPayments.map((t) => ({ date: t.date, amountMinor: t.amountMinor })),
         cycleStart,
         cycleEnd,
       );
-      if (stmt && stmt.paymentDueDate > cycleStart && stmt.paymentDueDate <= cycleEnd && stmt.totalAmountDueMinor > 0) {
-        cardCostEvents.push({ date: stmt.paymentDueDate, amountMinor: stmt.totalAmountDueMinor });
+      if (stmt && stmt.paymentDueDate > cycleStart && stmt.paymentDueDate <= cycleEnd && stmt.remainingMinor > 0) {
+        cardCostEvents.push({ date: stmt.paymentDueDate, amountMinor: stmt.remainingMinor });
       }
     }
   }

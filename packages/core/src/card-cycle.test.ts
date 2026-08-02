@@ -6,7 +6,6 @@ import {
   dueDateIn,
   nextDueDate,
   nextDueStatement,
-  nextStatement,
   statementDateForDue,
   upcomingStatements,
 } from "./card-cycle";
@@ -14,13 +13,24 @@ import {
 const d = (iso: string) => new Date(`${iso}T00:00:00`);
 const ymd = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-const aed = (major: number) => major * 100;
+// Minor units are integers — 4754.06 * 100 is 475406.00000000006 in floating
+// point, so round rather than letting fixtures carry fractional fils.
+const aed = (major: number) => Math.round(major * 100);
 
 describe("dueDateIn", () => {
   it("returns the due day, clamped to short months", () => {
     expect(ymd(dueDateIn(d("2026-07-16"), 3))).toBe("2026-07-03");
     expect(ymd(dueDateIn(d("2027-02-10"), 31))).toBe("2027-02-28");
     expect(ymd(dueDateIn(d("2028-02-10"), 30))).toBe("2028-02-29");
+  });
+});
+
+describe("nextDueDate", () => {
+  it("returns today when today IS the due day, else the next one", () => {
+    // The boundary that decides which cycle is 'current'.
+    expect(ymd(nextDueDate(d("2026-08-02"), 2))).toBe("2026-08-02");
+    expect(ymd(nextDueDate(d("2026-08-03"), 2))).toBe("2026-09-02");
+    expect(ymd(nextDueDate(d("2026-08-01"), 2))).toBe("2026-08-02");
   });
 });
 
@@ -137,83 +147,39 @@ describe("cardCycleBills", () => {
   });
 });
 
-describe("nextStatement", () => {
-  it("reports the statement date, payment due date and total due for the window", () => {
-    // today 20 Jun, due day 3 -> next payment 3 Jul, its statement 9 Jun.
-    // A charge on 1 Jun is billed now; one on 20 Jun belongs to a later cycle.
-    // Both are posted, so the balance carries both (700 + 999).
-    const s = nextStatement(
-      3,
-      aed(1_699),
-      [
-        { date: d("2026-06-01"), amountMinor: aed(700) },
-        { date: d("2026-06-20"), amountMinor: aed(999) },
-      ],
-      d("2026-06-20"),
-    );
-    expect(s).not.toBeNull();
-    expect(ymd(s!.paymentDueDate)).toBe("2026-07-03");
-    expect(ymd(s!.statementDate)).toBe("2026-06-09");
-    expect(s!.totalAmountDueMinor).toBe(aed(700));
-  });
-
-  it("never understates carried-over debt", () => {
-    const s = nextStatement(3, aed(5_000), [], d("2026-06-20"));
-    expect(s!.totalAmountDueMinor).toBe(aed(5_000));
-  });
-
-  it("reports 0 once the current bill is settled, rather than the residual balance", () => {
-    // Balance 2,601.62 is entirely next cycle's spend (a later-dated charge);
-    // this cycle is paid off, so nothing is payable now.
-    const s = nextStatement(
-      2,
-      aed(2_601.62),
-      [{ date: d("2026-07-20"), amountMinor: aed(2_647.56) }],
-      d("2026-08-02"),
-    );
-    expect(s!.totalAmountDueMinor).toBe(0);
-  });
-
-  it("returns null without a due day", () => {
-    expect(nextStatement(0, aed(100), [], d("2026-06-20"))).toBeNull();
-  });
-});
-
 describe("upcomingStatements", () => {
   const today = d("2026-07-20");
   const horizon = d("2027-07-20");
+  const noPay: { date: Date; amountMinor: number }[] = [];
 
   it("keeps the current statement, then bills recurring charges into later cycles", () => {
-    // The 700 posted charge sits in the balance (owedNow); it's in the current
-    // window so it stays on the current bill.
     const posted = [{ date: d("2026-06-20"), amountMinor: aed(700) }];
     const recurring = [
       { date: d("2026-08-20"), amountMinor: aed(300) },
       { date: d("2026-09-20"), amountMinor: aed(300) },
     ];
-    const statements = upcomingStatements(3, aed(700), posted, recurring, today, horizon);
+    const statements = upcomingStatements(3, aed(700), posted, recurring, noPay, today, horizon);
     expect(statements.map((s) => [ymd(s.paymentDueDate), s.totalAmountDueMinor])).toEqual([
       ["2026-08-03", aed(700)], // current issued statement (posted charge)
-      ["2026-10-03", aed(300)], // 20 Aug charge -> 8 Sep statement -> 3 Oct
-      ["2026-11-03", aed(300)], // 20 Sep charge -> 8 Oct statement -> 3 Nov
+      ["2026-10-03", aed(300)], // 20 Aug charge -> 9 Sep statement -> 3 Oct
+      ["2026-11-03", aed(300)], // 20 Sep charge -> 9 Oct statement -> 3 Nov
     ]);
   });
 
   it("keeps a future-dated posted charge out of the current bill", () => {
-    // A charge dated 15 Aug is in the balance but belongs to a later cycle — it
-    // must NOT inflate the current statement (paid 3 Aug).
     const statements = upcomingStatements(
       3,
-      aed(1_500), // the balance includes the future-dated charge
+      aed(1_500),
       [{ date: d("2026-08-15"), amountMinor: aed(1_500) }],
       [],
+      noPay,
       today,
       horizon,
     );
-    expect(statements[0]).toMatchObject({ totalAmountDueMinor: 0 }); // current bill, not 1,500
+    expect(statements[0]).toMatchObject({ totalAmountDueMinor: 0 });
     expect(ymd(statements[0].paymentDueDate)).toBe("2026-08-03");
     const later = statements.find((s) => s.totalAmountDueMinor === aed(1_500))!;
-    expect(ymd(later.paymentDueDate)).toBe("2026-10-03"); // 15 Aug -> 8 Sep stmt -> 3 Oct
+    expect(ymd(later.paymentDueDate)).toBe("2026-10-03");
   });
 
   it("puts a later recurring charge on its own future cycle, not the current one", () => {
@@ -221,19 +187,22 @@ describe("upcomingStatements", () => {
       3,
       aed(1_000),
       [],
-      [{ date: d("2026-07-25"), amountMinor: aed(250) }], // -> 8 Aug stmt -> 3 Sep
+      [{ date: d("2026-07-25"), amountMinor: aed(250) }],
+      noPay,
       today,
       horizon,
     );
-    expect(statements[0]).toMatchObject({ totalAmountDueMinor: aed(1_000) }); // owed now, due 3 Aug
+    // Nothing posted explains the 1,000 balance, so it is brought forward.
+    expect(statements[0]).toMatchObject({
+      totalAmountDueMinor: aed(1_000),
+      broughtForwardMinor: aed(1_000),
+    });
     expect(ymd(statements[0].paymentDueDate)).toBe("2026-08-03");
     expect(statements[1]).toMatchObject({ totalAmountDueMinor: aed(250) });
     expect(ymd(statements[1].paymentDueDate)).toBe("2026-09-03");
   });
 
   it("folds a back-dated recurring charge into the current Total Amount Due", () => {
-    // User example: due day 2, a recurring charge first dated 27 Jun (before
-    // today) belongs to the current statement paid 2 Aug — it must show there.
     const statements = upcomingStatements(
       2,
       0,
@@ -242,6 +211,7 @@ describe("upcomingStatements", () => {
         { date: d("2026-06-27"), amountMinor: aed(500) }, // -> 2 Aug (current)
         { date: d("2026-07-27"), amountMinor: aed(500) }, // -> 2 Sep (next)
       ],
+      noPay,
       d("2026-07-20"),
       d("2027-07-20"),
     );
@@ -252,51 +222,101 @@ describe("upcomingStatements", () => {
   });
 
   it("returns nothing without a usable due day", () => {
-    expect(upcomingStatements(0, aed(100), [], [], today, horizon)).toEqual([]);
+    expect(upcomingStatements(0, aed(100), [], [], noPay, today, horizon)).toEqual([]);
   });
 
-  // Real reported case: due day 2. Window 9 Jun–8 Jul billed 4,754.06 on 2 Aug;
-  // window 9 Jul–8 Aug has accrued 2,647.56 for 2 Sep. The 2 Aug bill was paid
-  // with 4,800 — so 2 Aug must read 0 and the 45.94 surplus must credit 2 Sep.
-  it("zeroes a settled cycle and carries the overpayment into the next", () => {
+  it("bills an opening balance no charge explains as brought forward", () => {
+    const statements = upcomingStatements(3, aed(1_200), [], [], noPay, today, horizon);
+    expect(statements[0]).toMatchObject({
+      totalAmountDueMinor: aed(1_200),
+      broughtForwardMinor: aed(1_200),
+      remainingMinor: aed(1_200),
+    });
+  });
+
+  it("folds an overdue charge onto the current bill rather than dropping it", () => {
+    // Due day 2; a charge dated 1 Jun billed on 2 Jul, already past on 20 Jul.
+    const statements = upcomingStatements(
+      2,
+      aed(500),
+      [{ date: d("2026-06-01"), amountMinor: aed(500) }],
+      [],
+      noPay,
+      today,
+      horizon,
+    );
+    expect(ymd(statements[0].paymentDueDate)).toBe("2026-08-02");
+    expect(statements[0].totalAmountDueMinor).toBe(aed(500));
+  });
+
+  // The reported case. Due day 2: window 9 Jun-8 Jul billed 4,754.06 on 2 Aug,
+  // paid with 4,800; window 9 Jul-8 Aug has accrued 2,647.56 for 2 Sep.
+  it("shows a settled bill at its full billed total, with the surplus crediting the next cycle", () => {
     const posted = [
       { date: d("2026-06-20"), amountMinor: aed(4_754.06) },
       { date: d("2026-07-20"), amountMinor: aed(2_647.56) },
     ];
+    const payments = [{ date: d("2026-08-01"), amountMinor: aed(4_800) }];
     const owedNow = aed(4_754.06) + aed(2_647.56) - aed(4_800);
-    const statements = upcomingStatements(2, owedNow, posted, [], d("2026-08-02"), d("2027-08-02"));
-    expect(statements.map((s) => [ymd(s.paymentDueDate), s.totalAmountDueMinor])).toEqual([
-      ["2026-08-02", 0],
-      ["2026-09-02", aed(2_601.62)], // 2,647.56 - 45.94 credit
+    const statements = upcomingStatements(2, owedNow, posted, [], payments, d("2026-08-02"), d("2027-08-02"));
+
+    expect(
+      statements.map((s) => [
+        ymd(s.paymentDueDate),
+        s.totalAmountDueMinor,
+        s.paidMinor,
+        s.remainingMinor,
+      ]),
+    ).toEqual([
+      // The bill still reads 4,754.06 — what the statement says — and is settled.
+      ["2026-08-02", aed(4_754.06), aed(4_754.06), 0],
+      // 45.94 of surplus credits the next cycle: 2,647.56 - 45.94.
+      ["2026-09-02", aed(2_647.56), aed(45.94), aed(2_601.62)],
     ]);
   });
 
+  it("bills a total that always equals the sum of its own charges", () => {
+    const posted = [
+      { date: d("2026-06-20"), amountMinor: aed(120.5) },
+      { date: d("2026-06-25"), amountMinor: aed(33) },
+      { date: d("2026-07-20"), amountMinor: aed(89.25) },
+    ];
+    const owedNow = posted.reduce((s, c) => s + c.amountMinor, 0);
+    const statements = upcomingStatements(2, owedNow, posted, [], noPay, d("2026-08-02"), d("2027-08-02"));
+    // First bill = the two June charges; second = the July one. No balance magic.
+    expect(statements[0].totalAmountDueMinor).toBe(aed(153.5));
+    expect(statements[1].totalAmountDueMinor).toBe(aed(89.25));
+  });
+
   it("spends a large credit across several following cycles", () => {
-    // Paid 1,000 against a 100 bill; the 900 surplus clears the next two 400s.
     const posted = [
       { date: d("2026-06-20"), amountMinor: aed(100) },
       { date: d("2026-07-20"), amountMinor: aed(400) },
       { date: d("2026-08-20"), amountMinor: aed(400) },
     ];
+    const payments = [{ date: d("2026-08-01"), amountMinor: aed(1_000) }];
     const owedNow = aed(100) + aed(400) + aed(400) - aed(1_000);
-    const statements = upcomingStatements(2, owedNow, posted, [], d("2026-08-02"), d("2027-08-02"));
-    expect(statements.every((s) => s.totalAmountDueMinor === 0)).toBe(true);
+    const statements = upcomingStatements(2, owedNow, posted, [], payments, d("2026-08-02"), d("2027-08-02"));
+    expect(statements.every((s) => s.remainingMinor === 0)).toBe(true);
+    // Bills themselves are unchanged — only what is left to pay went to zero.
+    expect(statements.map((s) => s.totalAmountDueMinor)).toEqual([aed(100), aed(400), aed(400)]);
   });
 });
 
 describe("nextDueStatement", () => {
-  it("skips a paid-off cycle and points at the next bill actually owing", () => {
+  it("skips a settled cycle and points at the next bill actually owing", () => {
     const posted = [
       { date: d("2026-06-20"), amountMinor: aed(4_754.06) },
       { date: d("2026-07-20"), amountMinor: aed(2_647.56) },
     ];
+    const payments = [{ date: d("2026-08-01"), amountMinor: aed(4_800) }];
     const owedNow = aed(4_754.06) + aed(2_647.56) - aed(4_800);
-    const s = nextDueStatement(2, owedNow, posted, [], d("2026-08-02"), d("2027-08-02"));
+    const s = nextDueStatement(2, owedNow, posted, [], payments, d("2026-08-02"), d("2027-08-02"));
     expect(ymd(s!.paymentDueDate)).toBe("2026-09-02");
-    expect(s!.totalAmountDueMinor).toBe(aed(2_601.62));
+    expect(s!.remainingMinor).toBe(aed(2_601.62));
   });
 
   it("is null when nothing is owed anywhere in the horizon", () => {
-    expect(nextDueStatement(2, 0, [], [], d("2026-08-02"), d("2027-08-02"))).toBeNull();
+    expect(nextDueStatement(2, 0, [], [], [], d("2026-08-02"), d("2027-08-02"))).toBeNull();
   });
 });

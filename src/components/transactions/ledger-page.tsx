@@ -1,5 +1,6 @@
 import {
   getAccountsWithBalances,
+  getCardPayments,
   getCategories,
   getDebitCardCycleSummary,
   getRecurringIncomeSchedule,
@@ -12,7 +13,7 @@ import { TransactionsView, type TxRow } from "@/components/transactions/transact
 import { RecurringSection, type RecurringRow } from "@/components/transactions/recurring-section";
 import { IncomeScheduleSection } from "@/components/transactions/income-schedule-section";
 import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
-import { upcomingStatements, dueDateForCharge } from "@/lib/card-cycle";
+import { upcomingStatements, statementBucketDue, nextDueDate } from "@/lib/card-cycle";
 import { expandRecurrence } from "@/lib/projection";
 import { addMonths, endOfMonth, startOfMonth, subMonths } from "date-fns";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
@@ -26,6 +27,11 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
     kind === "income" ? getRecurringIncomeSchedule() : Promise.resolve([]),
     kind === "expense" ? getDebitCardCycleSummary() : Promise.resolve(null),
   ]);
+
+  // Payments are transfers into the card, so they're absent from the expense
+  // rows above — statements can't be settled without loading them separately.
+  const cardIds = accounts.filter((a) => a.type === "credit_card").map((a) => a.id);
+  const paymentsByCard = kind === "expense" ? await getCardPayments(cardIds) : {};
 
   const accountsLite: AccountLite[] = accounts.map((a) => ({
     id: a.id,
@@ -120,22 +126,22 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
               ).map((date) => ({ date, amountMinor: r.amountMinor })),
             )
           : [];
+      const payments = paymentsByCard[a.id] ?? [];
       const statements =
         a.dueDay != null
-          ? upcomingStatements(a.dueDay, owedMinor, postedCharges, futureCharges, today, horizon)
+          ? upcomingStatements(a.dueDay, -a.balanceMinor, postedCharges, futureCharges, payments, today, horizon)
           : [];
 
-      // Itemize: every posted charge and projected recurring occurrence, each
-      // bucketed onto the statement whose due date it belongs to (same rule
-      // upcomingStatements/cardCycleBills use internally), so a click on any
-      // statement's total shows exactly the line items that sum to it.
+      // Itemize with the SAME bucketing the engine bills with, so a click on any
+      // statement total shows exactly the line items that sum to it.
+      const currentDue = a.dueDay != null ? nextDueDate(today, a.dueDay) : null;
       const itemsByDue = new Map<
         number,
         { date: Date; amountMinor: number; label: string; recurring: boolean }[]
       >();
       const bucket = (item: { date: Date; amountMinor: number; label: string; recurring: boolean }) => {
-        if (a.dueDay == null) return;
-        const due = dueDateForCharge(item.date, a.dueDay).getTime();
+        if (a.dueDay == null || currentDue == null) return;
+        const due = statementBucketDue(item.date, a.dueDay, currentDue).getTime();
         const list = itemsByDue.get(due);
         if (list) list.push(item);
         else itemsByDue.set(due, [item]);
@@ -159,10 +165,22 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
         }
       }
 
-      const statementsWithItems = statements.map((s) => ({
-        ...s,
-        items: (itemsByDue.get(s.paymentDueDate.getTime()) ?? []).sort((x, y) => x.date.getTime() - y.date.getTime()),
-      }));
+      const statementsWithItems = statements.map((s) => {
+        const items = [...(itemsByDue.get(s.paymentDueDate.getTime()) ?? [])].sort(
+          (x, y) => x.date.getTime() - y.date.getTime(),
+        );
+        // Opening/overdue debt has no line of its own — show it so the
+        // itemisation still adds up to the billed total.
+        if (s.broughtForwardMinor > 0) {
+          items.unshift({
+            date: s.statementDate,
+            amountMinor: s.broughtForwardMinor,
+            label: "Balance brought forward",
+            recurring: false,
+          });
+        }
+        return { ...s, items };
+      });
 
       return {
         id: a.id,

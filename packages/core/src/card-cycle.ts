@@ -125,140 +125,132 @@ export function cardCycleBills(card: CardBillInput, from: Date, to: Date): Dated
 export interface StatementSummary {
   statementDate: Date;
   paymentDueDate: Date;
-  /** Charges registered in this statement's window (prevStatement, thisStatement]. */
+  /**
+   * What the bill says: the charges registered in this statement's window, plus
+   * (on the current statement only) anything brought forward. This is
+   * payment-BLIND — a settled bill still shows its full total, exactly like a
+   * real statement — and always equals the sum of the itemised line items.
+   */
   totalAmountDueMinor: number;
+  /**
+   * Debt billed here that predates this statement's own window: an opening
+   * balance, plus charges whose due date has already passed. Only ever non-zero
+   * on the current statement. Rendered as a "brought forward" line item so the
+   * itemisation still reconciles to the total.
+   */
+  broughtForwardMinor: number;
+  /** Payments settled against this bill (oldest bill first). */
+  paidMinor: number;
+  /** Still payable: totalAmountDueMinor - paidMinor, floored at 0. */
+  remainingMinor: number;
 }
 
 /**
- * The current (issued) statement: its statement date, payment due date, and what
- * is STILL payable on it. `charges` should be the card's registered (posted)
- * charges.
- *
- * The balance is the source of truth because it is payment-aware, while the
- * charge list is not — a paid-off bill still has all its charges on record. So
- * the current bill is the balance MINUS the charges that belong to later cycles
- * (dated after this statement closes), never the raw sum of this window. Once
- * the bill is settled this returns 0; use `nextDueStatement` to find the next
- * cycle that actually has something to pay.
+ * The due date a charge is billed on, folding anything already overdue onto the
+ * current bill. Callers itemising a statement MUST bucket with this so the line
+ * items reconcile to `totalAmountDueMinor`.
  */
-export function nextStatement(
-  dueDay: number,
-  owedNowMinor: number,
-  charges: DatedAmount[],
-  today: Date,
-): StatementSummary | null {
-  if (!Number.isFinite(dueDay) || dueDay < 1) return null;
-  const now = startOfDay(today);
-  const paymentDueDate = nextDueDate(now, dueDay);
-  const thisStatement = statementDateForDue(paymentDueDate, dueDay);
-
-  // Charges dated after this statement closes are billed on a later due date;
-  // they sit in the balance but are not payable now.
-  const laterSum = charges.reduce(
-    (sum, c) =>
-      isAfter(startOfDay(c.date), thisStatement) ? sum + Math.max(0, c.amountMinor) : sum,
-    0,
-  );
-
-  return {
-    statementDate: thisStatement,
-    paymentDueDate,
-    totalAmountDueMinor: Math.max(0, Math.max(0, owedNowMinor) - laterSum),
-  };
+export function statementBucketDue(chargeDate: Date, dueDay: number, currentDue: Date): Date {
+  const due = dueDateForCharge(chargeDate, dueDay);
+  return isAfter(currentDue, due) ? currentDue : due;
 }
 
 /**
- * Every statement over [today, horizon]: the current statement (what's owed for
- * this cycle and any overdue carry) followed by future statements built from
- * charges that fall AFTER the current statement closes — future-dated posted
- * spend plus projected recurring/scheduled charges. Amounts landing on the same
- * payment due date are merged, so a monthly recurring cost surfaces as one
- * "Total Amount Due" line per cycle.
+ * Every statement over [today, horizon], each billed like a real statement and
+ * then settled against the card's payments.
  *
- * `owedNowMinor` is the card's balance (payment-aware). A charge you dated into a
- * later cycle sits in that balance but does NOT belong to the current bill, so we
- * subtract those future-dated posted charges out of the current statement and
- * bill them on their own due dates instead.
+ * Billing is payment-blind: a statement's total is the sum of the charges whose
+ * due date it is, so it always reconciles to its line items. Anything already
+ * overdue folds onto the current bill, as does any opening balance not explained
+ * by the known charges and payments (`broughtForwardMinor`).
+ *
+ * Payments are then applied oldest-bill-first, which is how a card actually
+ * clears: paying a bill in full settles it and any surplus becomes a credit that
+ * eats into the next cycles. So a settled bill still shows its full
+ * `totalAmountDueMinor` (matching the paper statement) with `remainingMinor` 0.
+ *
+ * `postedCharges` and `payments` are real posted rows; `futureCharges` are
+ * projections (recurring/scheduled) and so are deliberately excluded from the
+ * balance reconciliation.
+ *
+ * `owedNowMinor` is the card's balance as a positive amount owed — pass it
+ * SIGNED (i.e. `-balanceMinor`), so an overpaid card correctly reports a
+ * negative figure rather than a floored zero.
  */
 export function upcomingStatements(
   dueDay: number,
   owedNowMinor: number,
   postedCharges: DatedAmount[],
   futureCharges: DatedAmount[],
+  payments: DatedAmount[],
   today: Date,
   horizon: Date,
 ): StatementSummary[] {
   if (!Number.isFinite(dueDay) || dueDay < 1) return [];
   const now = startOfDay(today);
   const currentDue = nextDueDate(now, dueDay);
-  const thisStatement = statementDateForDue(currentDue, dueDay);
+  const end = startOfDay(horizon);
 
-  // Posted charges dated after the current statement's close belong to a later
-  // cycle — pull them out of the current bill and bill them by their own date.
-  const futurePosted = postedCharges.filter((c) => isAfter(startOfDay(c.date), thisStatement));
-  const futurePostedSum = futurePosted.reduce((s, c) => s + Math.max(0, c.amountMinor), 0);
+  const sum = (xs: DatedAmount[]) => xs.reduce((s, x) => s + Math.max(0, x.amountMinor), 0);
 
-  // The current statement (plus any overdue carry) = the balance minus those
-  // not-yet-billed future charges. Balance is payment-aware, so this is too.
-  // If it goes negative the bill was OVERPAID; that surplus is a credit on the
-  // card which settles later cycles, so carry it forward rather than losing it.
-  const currentResidual = Math.max(0, owedNowMinor) - futurePostedSum;
-  const currentBaseMinor = Math.max(0, currentResidual);
-  let creditMinor = Math.max(0, -currentResidual);
+  // Whatever the balance carries that the known charges and payments don't
+  // explain is pre-existing debt (an opening balance): bill it on the current
+  // statement. balance = opening + charges - payments. `owedNowMinor` must NOT
+  // be floored here — an overpaid card owes a negative amount, and clamping that
+  // credit to zero would reappear as phantom brought-forward debt.
+  const broughtForwardMinor = Math.max(0, owedNowMinor - sum(postedCharges) + sum(payments));
 
-  const byDue = new Map<number, StatementSummary>();
-  const put = (s: StatementSummary) => {
-    const key = s.paymentDueDate.getTime();
-    const existing = byDue.get(key);
-    if (existing) existing.totalAmountDueMinor += s.totalAmountDueMinor;
-    else byDue.set(key, { ...s });
-  };
+  const billedByDue = new Map<number, number>();
+  // Keep the current statement even when nothing is billed this cycle, so it
+  // stays the first entry and callers can read "this cycle" from index 0.
+  billedByDue.set(currentDue.getTime(), broughtForwardMinor);
 
-  // Keep the current statement even if nothing is due this cycle, so it stays
-  // the first entry and callers can read "due now" from index 0.
-  put({ statementDate: thisStatement, paymentDueDate: currentDue, totalAmountDueMinor: currentBaseMinor });
-
-  // Future-dated posted spend + projected charges, each billed on the due date
-  // of the statement that closes after it. owedNow is already accounted for
-  // above, so pass 0 here to avoid double counting.
-  const bills = cardCycleBills(
-    { dueDay, owedNowMinor: 0, charges: [...futurePosted, ...futureCharges] },
-    now,
-    horizon,
-  );
-  for (const b of bills) {
-    put({
-      statementDate: statementDateForDue(b.date, dueDay),
-      paymentDueDate: b.date,
-      totalAmountDueMinor: b.amountMinor,
-    });
+  for (const c of [...postedCharges, ...futureCharges]) {
+    const amount = Math.max(0, c.amountMinor);
+    if (amount <= 0) continue;
+    const due = statementBucketDue(startOfDay(c.date), dueDay, currentDue);
+    if (isAfter(due, end)) continue;
+    billedByDue.set(due.getTime(), (billedByDue.get(due.getTime()) ?? 0) + amount);
   }
 
-  const statements = [...byDue.values()].sort(
-    (a, b) => a.paymentDueDate.getTime() - b.paymentDueDate.getTime(),
-  );
+  const statements: StatementSummary[] = [...billedByDue.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([dueMs, billed]) => {
+      const paymentDueDate = new Date(dueMs);
+      return {
+        statementDate: statementDateForDue(paymentDueDate, dueDay),
+        paymentDueDate,
+        totalAmountDueMinor: billed,
+        broughtForwardMinor: dueMs === currentDue.getTime() ? broughtForwardMinor : 0,
+        paidMinor: 0,
+        remainingMinor: billed,
+      };
+    });
 
-  // Spend any overpayment credit against the earliest cycles first.
+  // Settle oldest bill first; a surplus rolls on as credit against later cycles.
+  let unapplied = sum(payments);
   for (const s of statements) {
-    if (creditMinor <= 0) break;
-    const applied = Math.min(creditMinor, s.totalAmountDueMinor);
-    s.totalAmountDueMinor -= applied;
-    creditMinor -= applied;
+    if (unapplied <= 0) break;
+    const applied = Math.min(unapplied, s.totalAmountDueMinor);
+    s.paidMinor = applied;
+    s.remainingMinor = s.totalAmountDueMinor - applied;
+    unapplied -= applied;
   }
 
   return statements;
 }
 
 /**
- * The next statement that actually has something to pay — skipping cycles
- * already settled. A card paid off on its due date should point at the NEXT
- * bill, not report today's zeroed one.
+ * The next statement with something left to pay — skipping bills already
+ * settled. A card paid off on its due date points at the NEXT bill, not at
+ * today's cleared one.
  */
 export function nextDueStatement(
   dueDay: number,
   owedNowMinor: number,
   postedCharges: DatedAmount[],
   futureCharges: DatedAmount[],
+  payments: DatedAmount[],
   today: Date,
   horizon: Date,
 ): StatementSummary | null {
@@ -267,8 +259,9 @@ export function nextDueStatement(
     owedNowMinor,
     postedCharges,
     futureCharges,
+    payments,
     today,
     horizon,
   );
-  return statements.find((s) => s.totalAmountDueMinor > 0) ?? null;
+  return statements.find((s) => s.remainingMinor > 0) ?? null;
 }

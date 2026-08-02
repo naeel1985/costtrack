@@ -392,7 +392,16 @@ export async function loadForwardView(
     }),
     cardAccountIds.length
       ? prisma.transaction.findMany({
-          where: { userId, status: "posted", type: "expense", accountId: { in: cardAccountIds } },
+          where: {
+            userId,
+            status: "posted",
+            OR: [
+              // Charges to the card.
+              { type: "expense", accountId: { in: cardAccountIds } },
+              // Payments: a transfer whose destination is the card.
+              { type: "transfer", transferAccountId: { in: cardAccountIds } },
+            ],
+          },
         })
       : Promise.resolve([]),
     // Income occurrences already debited into an account (recurringRuleId/date are
@@ -412,13 +421,19 @@ export async function loadForwardView(
   for (const t of rawDebited) if (t.recurringRuleId) debited.add(occurrenceKey(t.recurringRuleId, t.date));
   const notDebited = (ruleId: string) => (date: Date) => !debited.has(occurrenceKey(ruleId, date));
 
-  // Posted card spend, grouped by card, so we can split out future-dated charges.
+  // Posted card spend and card payments, grouped by card. Payments are transfers
+  // INTO the card, so they key off transferAccountId, not accountId.
   const postedByCard = new Map<string, DatedAmount[]>();
+  const paymentsByCard = new Map<string, DatedAmount[]>();
   for (const raw of rawPostedCardTx) {
     const t = decryptTransaction(raw, dek);
-    const list = postedByCard.get(t.accountId);
+    const isPayment = t.type === "transfer";
+    const cardId = isPayment ? t.transferAccountId : t.accountId;
+    if (!cardId) continue;
+    const target = isPayment ? paymentsByCard : postedByCard;
+    const list = target.get(cardId);
     if (list) list.push({ date: t.date, amountMinor: t.amountMinor });
-    else postedByCard.set(t.accountId, [{ date: t.date, amountMinor: t.amountMinor }]);
+    else target.set(cardId, [{ date: t.date, amountMinor: t.amountMinor }]);
   }
 
   // ── Credit cards are loans repaid on a due date ─────────────────────────────
@@ -522,7 +537,8 @@ export async function loadForwardView(
   let nextCardDue: NextCardDue | null = null;
   for (const card of cards) {
     const dueDay = card.dueDay!;
-    const owedNow = Math.max(0, -card.balanceMinor);
+    // Signed: negative when the card is in credit (overpaid).
+    const owedNow = -card.balanceMinor;
     // One statement series drives all three readings — the pool projection, the
     // dashboard's "next due", and the Costs page — so they can never disagree.
     // It is payment-aware: a settled cycle bills 0 and any overpayment credits
@@ -532,19 +548,21 @@ export async function loadForwardView(
       owedNow,
       postedByCard.get(card.id) ?? [],
       cardCharges.get(card.id) ?? [],
+      paymentsByCard.get(card.id) ?? [],
       today,
       windowEnd,
     );
+    // Only what is still unpaid leaves the pool — a settled bill costs nothing.
     const bills = statements
-      .filter((s) => s.totalAmountDueMinor > 0)
-      .map((s) => ({ date: s.paymentDueDate, amountMinor: s.totalAmountDueMinor }));
+      .filter((s) => s.remainingMinor > 0)
+      .map((s) => ({ date: s.paymentDueDate, amountMinor: s.remainingMinor }));
     costEvents.push(...bills);
     cardBillEvents.push(...bills);
 
     // Skip cycles already paid off — the next bill is the next one owing.
-    const stmt = statements.find((s) => s.totalAmountDueMinor > 0);
+    const stmt = statements.find((s) => s.remainingMinor > 0);
     if (stmt && (!nextCardDue || stmt.paymentDueDate < nextCardDue.date)) {
-      nextCardDue = { date: stmt.paymentDueDate, amountMinor: stmt.totalAmountDueMinor, cardName: card.name };
+      nextCardDue = { date: stmt.paymentDueDate, amountMinor: stmt.remainingMinor, cardName: card.name };
     }
   }
 
@@ -821,6 +839,31 @@ export async function getTransactions(filters: TransactionFilters = {}) {
   }
   if (filters.tag) mapped = mapped.filter((t) => t.tagList.includes(filters.tag!));
   return mapped;
+}
+
+/**
+ * Posted payments against each credit card, keyed by card id. A payment is a
+ * transfer INTO the card account, so it never appears in an expense query —
+ * statement settlement has to load it separately.
+ */
+export async function getCardPayments(cardIds: string[]): Promise<Record<string, DatedAmount[]>> {
+  const { user, dek } = await requireUser();
+  if (cardIds.length === 0) return {};
+  const rows = await prisma.transaction.findMany({
+    where: {
+      userId: user.id,
+      status: "posted",
+      type: "transfer",
+      transferAccountId: { in: cardIds },
+    },
+  });
+  const byCard: Record<string, DatedAmount[]> = {};
+  for (const raw of rows) {
+    const t = decryptTransaction(raw, dek);
+    if (!t.transferAccountId) continue;
+    (byCard[t.transferAccountId] ??= []).push({ date: t.date, amountMinor: t.amountMinor });
+  }
+  return byCard;
 }
 
 export async function getCategories() {
