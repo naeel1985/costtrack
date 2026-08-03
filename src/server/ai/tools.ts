@@ -91,6 +91,24 @@ export const TOOL_SCHEMAS = [
     },
   },
   {
+    name: "list_recurring_rules",
+    description:
+      "Every recurring income and cost rule with its cadence, amount, account and active state — the user's CONFIGURATION, not just their data. Use it whenever a forward-looking number looks wrong or missing (a null next salary, a pool that never moves, cycle buckets falling back to calendar months), and for any question about what is set up, how often something repeats, or which rule drives a projection. Each rule reports `isSalary`: at most one active income rule may carry it, and the whole free-savings cycle depends on it. The reply also carries `salaryRuleConfigured` and, when relevant, `salaryNotConfiguredHint` explaining the consequences.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "list_cheques",
+    description:
+      "Post-dated cheques (PDCs), issued and received, with counterparty, amount, issue and due dates and status. Use for any question about cheques, what is going to clear, or bounce risk.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "list_provisions",
+    description:
+      "Provisions — money earmarked for a future obligation — with target, funded and remaining amounts, due date and status. Use for questions about savings goals, what is set aside, or whether a provision is on track.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "get_free_savings_pool",
     description:
       "The free-savings pool: a cumulative figure that only changes when the user CONFIRMS a salary debit (not a live running balance). Returns the current pool amount, what's next (salary, credit-card due, cheque, provision — each with date and amount), a provisional pool estimate for the next salary date, and runsOutOn/runsOutAmount — the first future date (if any, over a 2-year projection) the pool is projected to go negative if everything known lands as expected. Use this for any question about \"free savings\", \"how much can I safely spend\", \"what's left over\", \"will I be okay next cycle\", or \"when will I run out of money\" — do not derive this from list_accounts balances, which is a different, uncommitted number.",
@@ -296,7 +314,7 @@ async function listDuePayments(ctx: ToolContext, args: { daysAhead?: number }) {
         amount: money(remaining),
         currency: pr.currency,
         kind: "provision",
-        ref: ctx.tok.tokenize(pr.name) || "provision",
+        ref: pr.name.trim() ? ctx.tok.tokenForPayee(pr.name) : "provision",
         description: "Provision due",
       });
     }
@@ -319,7 +337,7 @@ async function listDuePayments(ctx: ToolContext, args: { daysAhead?: number }) {
         currency: r.currency,
         kind: "recurring_cost",
         ref: ctx.tok.tokenForAccount(r.accountId),
-        description: ctx.tok.tokenize(r.name) || "Recurring cost",
+        description: r.name.trim() ? ctx.tok.tokenForPayee(r.name) : "Recurring cost",
       });
     }
   }
@@ -441,7 +459,7 @@ async function getFreeSavingsPool(ctx: ToolContext) {
       ? {
           date: iso(forward.nextSalary.date),
           amount: money(forward.nextSalary.amountMinor),
-          name: ctx.tok.tokenize(forward.nextSalary.name) || "Salary",
+          name: forward.nextSalary.name.trim() ? ctx.tok.tokenForPayee(forward.nextSalary.name) : "Salary",
         }
       : null,
     nextCreditCardDue: forward.nextCardDue
@@ -456,14 +474,14 @@ async function getFreeSavingsPool(ctx: ToolContext) {
           date: iso(forward.nextCheque.date),
           amount: money(forward.nextCheque.amountMinor),
           direction: forward.nextCheque.direction,
-          counterparty: ctx.tok.tokenize(forward.nextCheque.counterparty) || "payee",
+          counterparty: forward.nextCheque.counterparty.trim() ? ctx.tok.tokenForPayee(forward.nextCheque.counterparty) : "payee",
         }
       : null,
     nextProvision: forward.nextProvision
       ? {
           date: iso(forward.nextProvision.date),
           amount: money(forward.nextProvision.amountMinor),
-          name: ctx.tok.tokenize(forward.nextProvision.name) || "provision",
+          name: forward.nextProvision.name.trim() ? ctx.tok.tokenForPayee(forward.nextProvision.name) : "provision",
         }
       : null,
     provisionalPoolAtNextSalary:
@@ -473,6 +491,96 @@ async function getFreeSavingsPool(ctx: ToolContext) {
     // lands as expected — this is the "will I be okay" signal.
     runsOutOn: forward.poolDryDate ? iso(forward.poolDryDate) : null,
     runsOutAmount: forward.poolDryAmountMinor != null ? money(forward.poolDryAmountMinor) : null,
+  };
+}
+
+/**
+ * Recurring rules — the app's configuration, not just its data.
+ *
+ * `isSalary` matters far more than it looks: exactly one active income rule
+ * may carry it, and the whole free-savings model hangs off that flag. Without
+ * it there is no salary cycle to close, so the pool never realizes and
+ * nextSalary stays null. Exposing the flag lets the assistant diagnose that
+ * itself instead of only reporting the symptom.
+ */
+async function listRecurringRules(ctx: ToolContext) {
+  const raw = await prisma.recurringRule.findMany({
+    where: { userId: ctx.userId },
+    orderBy: [{ type: "asc" }, { createdAt: "asc" }],
+  });
+  const rules = raw.map((r) => decryptRecurring(r, ctx.dek));
+  const salaryCount = rules.filter((r) => r.type === "income" && r.isSalary && r.isActive).length;
+
+  return {
+    rules: rules.map((r) => ({
+      name: r.name.trim() ? ctx.tok.tokenForPayee(r.name) : "rule",
+      type: r.type,
+      isSalary: r.isSalary,
+      isActive: r.isActive,
+      amount: money(r.amountMinor),
+      currency: r.currency,
+      frequency: r.frequency,
+      interval: r.interval,
+      startDate: iso(r.startDate),
+      endDate: r.endDate ? iso(r.endDate) : null,
+      occurrenceCount: r.occurrenceCount ?? null,
+      nextRunDate: iso(r.nextRunDate),
+      account: ctx.tok.tokenForAccount(r.accountId),
+    })),
+    /**
+     * Set when the user has income rules but none is flagged as salary — the
+     * cause of a null nextSalary and a pool that never closes a cycle.
+     */
+    salaryRuleConfigured: salaryCount > 0,
+    salaryNotConfiguredHint:
+      salaryCount === 0 && rules.some((r) => r.type === "income" && r.isActive)
+        ? "No active income rule is flagged as salary, so there is no salary cycle: nextSalary is null, the free-savings pool never closes a cycle and falls back to the live balance, and cycle buckets fall back to calendar months. Fix: edit the income rule and turn on 'This is my salary'."
+        : null,
+  };
+}
+
+/** Post-dated cheques, both directions. */
+async function listCheques(ctx: ToolContext) {
+  const raw = await prisma.pDC.findMany({ where: { userId: ctx.userId }, orderBy: { dueDate: "asc" } });
+  return {
+    cheques: raw.map((p) => {
+      const c = decryptPdc(p, ctx.dek);
+      return {
+        direction: c.direction,
+        counterparty: c.counterparty.trim() ? ctx.tok.tokenForPayee(c.counterparty) : "payee",
+        amount: money(c.amountMinor),
+        currency: c.currency,
+        issueDate: iso(c.issueDate),
+        dueDate: iso(c.dueDate),
+        status: c.status,
+        bank: c.bankName ? ctx.tok.tokenize(c.bankName) : null,
+        account: ctx.tok.tokenForAccount(c.accountId),
+      };
+    }),
+  };
+}
+
+/** Provisions — money earmarked for a future obligation. */
+async function listProvisions(ctx: ToolContext) {
+  const raw = await prisma.provision.findMany({
+    where: { userId: ctx.userId },
+    include: { allocations: true },
+    orderBy: [{ priority: "asc" }, { dueDate: "asc" }],
+  });
+  return {
+    provisions: raw.map((p) => {
+      const v = decryptProvision(p, ctx.dek);
+      const funded = v.allocations.reduce((s, a) => s + a.amountMinor, 0);
+      return {
+        name: v.name.trim() ? ctx.tok.tokenForPayee(v.name) : "provision",
+        target: money(v.targetMinor),
+        funded: money(funded),
+        remaining: money(Math.max(0, v.targetMinor - funded)),
+        currency: v.currency,
+        dueDate: v.dueDate ? iso(v.dueDate) : null,
+        status: v.status,
+      };
+    }),
   };
 }
 
@@ -492,6 +600,12 @@ export async function runTool(name: string, args: Record<string, unknown>, ctx: 
       return spendingSummary(ctx, args as { months?: number });
     case "search_transactions":
       return searchTransactions(ctx, args as never);
+    case "list_recurring_rules":
+      return listRecurringRules(ctx);
+    case "list_cheques":
+      return listCheques(ctx);
+    case "list_provisions":
+      return listProvisions(ctx);
     default:
       return { error: `Unknown tool: ${name}` };
   }
