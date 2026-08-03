@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HeroProjection } from "@/components/marketing/hero-projection";
+import { AnimatedGridPattern } from "@/components/ui/animated-grid-pattern";
+import { BlurFade } from "@/components/ui/blur-fade";
 
 export const metadata: Metadata = {
   title: "Cashflow — See your money before it moves",
@@ -48,55 +50,70 @@ export default function HomePage() {
     <>
       {/* ── Hero ─────────────────────────────────────────────────────── */}
       <section className="relative overflow-hidden">
-        {/* Aurora wash + hairline grid: depth without a background image. */}
+        {/* Aurora wash + a grid whose cells flicker gently, like a ledger ticking. */}
         <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
           <div className="animate-aurora absolute -top-40 left-1/2 h-[560px] w-[900px] -translate-x-1/2 rounded-full bg-[radial-gradient(closest-side,var(--primary),transparent)] opacity-[0.13] blur-2xl" />
           <div className="animate-aurora absolute -top-24 right-[8%] h-[380px] w-[520px] rounded-full bg-[radial-gradient(closest-side,var(--positive),transparent)] opacity-[0.10] blur-2xl [animation-delay:-9s]" />
-          <div className="absolute inset-0 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:56px_56px] opacity-[0.35] [mask-image:radial-gradient(70%_60%_at_50%_0%,black,transparent)]" />
+          <AnimatedGridPattern
+            width={56}
+            height={56}
+            numSquares={26}
+            maxOpacity={0.06}
+            duration={4}
+            className="inset-x-0 h-[620px] skew-y-0 [mask-image:radial-gradient(70%_60%_at_50%_0%,black,transparent)]"
+          />
         </div>
 
         <div className="mx-auto max-w-6xl px-4 pt-16 pb-10 text-center sm:px-6 lg:pt-24">
-          <span className="inline-flex items-center gap-2 rounded-full border bg-card/80 px-3 py-1 text-xs font-medium text-muted-foreground backdrop-blur">
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-            Forward finance, kept private
-          </span>
-          <h1 className="mx-auto mt-6 max-w-4xl text-4xl font-bold tracking-tight text-balance sm:text-5xl lg:text-6xl">
-            See your money{" "}
-            <span className="bg-gradient-to-r from-primary via-primary to-positive bg-clip-text text-transparent">
-              before it moves
+          <BlurFade delay={0.05}>
+            <span className="inline-flex items-center gap-2 rounded-full border bg-card/80 px-3 py-1 text-xs font-medium text-muted-foreground backdrop-blur">
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              Forward finance, kept private
             </span>
-            .
-          </h1>
-          <p className="mx-auto mt-5 max-w-xl text-lg text-pretty text-muted-foreground">
-            Your balance today tells you nothing about the 14th. Cashflow puts income, costs,
-            recurring bills and post-dated cheques on one forward timeline — so the shortfall is
-            something you plan around, not something you discover.
-          </p>
-          <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-            <Button asChild size="lg">
-              <Link href="/register">
-                Start free <ArrowRight className="h-4 w-4" />
-              </Link>
-            </Button>
-            <Button asChild size="lg" variant="outline">
-              <Link href="/packages">See pricing</Link>
-            </Button>
-          </div>
-          <ul className="mt-6 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
-            <li className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-positive" /> Free plan, no card
-            </li>
-            <li className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-positive" /> End-to-end encrypted
-            </li>
-            <li className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-positive" /> Built for AED &amp; cheques
-            </li>
-          </ul>
+          </BlurFade>
+          <BlurFade delay={0.15}>
+            <h1 className="mx-auto mt-6 max-w-4xl text-4xl font-bold tracking-tight text-balance sm:text-5xl lg:text-6xl">
+              See your money{" "}
+              <span className="bg-gradient-to-r from-primary via-primary to-positive bg-clip-text text-transparent">
+                before it moves
+              </span>
+              .
+            </h1>
+          </BlurFade>
+          <BlurFade delay={0.28}>
+            <p className="mx-auto mt-5 max-w-xl text-lg text-pretty text-muted-foreground">
+              Your balance today tells you nothing about the 14th. Cashflow puts income, costs,
+              recurring bills and post-dated cheques on one forward timeline — so the shortfall is
+              something you plan around, not something you discover.
+            </p>
+          </BlurFade>
+          <BlurFade delay={0.4}>
+            <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+              <Button asChild size="lg">
+                <Link href="/register">
+                  Start free <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <Link href="/packages">See pricing</Link>
+              </Button>
+            </div>
+            <ul className="mt-6 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
+              <li className="flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4 text-positive" /> Free plan, no card
+              </li>
+              <li className="flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4 text-positive" /> End-to-end encrypted
+              </li>
+              <li className="flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4 text-positive" /> Built for AED &amp; cheques
+              </li>
+            </ul>
+          </BlurFade>
         </div>
 
         {/* The product's whole argument, drawn. */}
-        <div className="mx-auto max-w-6xl px-4 pb-16 sm:px-6 lg:pb-24">
+        <BlurFade delay={0.5} className="mx-auto max-w-6xl px-4 pb-16 sm:px-6 lg:pb-24">
           <div className="relative rounded-3xl border bg-card/70 p-4 shadow-xl backdrop-blur sm:p-8">
             <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-sm font-medium">
@@ -110,7 +127,7 @@ export default function HomePage() {
             </div>
             <HeroProjection />
           </div>
-        </div>
+        </BlurFade>
       </section>
 
       {/* ── Why timing ───────────────────────────────────────────────── */}
@@ -127,14 +144,16 @@ export default function HomePage() {
           </div>
 
           <div className="mt-10 grid gap-4 md:grid-cols-3">
-            {WHY.map((w) => (
-              <div key={w.label} className="spotlight rounded-2xl border bg-card p-6">
-                <div className="bg-gradient-to-br from-primary to-positive bg-clip-text text-3xl font-bold tracking-tight text-transparent">
-                  {w.stat}
+            {WHY.map((w, i) => (
+              <BlurFade key={w.label} inView delay={i * 0.1}>
+                <div className="spotlight h-full rounded-2xl border bg-card p-6">
+                  <div className="bg-gradient-to-br from-primary to-positive bg-clip-text text-3xl font-bold tracking-tight text-transparent">
+                    {w.stat}
+                  </div>
+                  <div className="mt-1 text-sm font-medium">{w.label}</div>
+                  <p className="mt-3 text-sm text-muted-foreground">{w.body}</p>
                 </div>
-                <div className="mt-1 text-sm font-medium">{w.label}</div>
-                <p className="mt-3 text-sm text-muted-foreground">{w.body}</p>
-              </div>
+              </BlurFade>
             ))}
           </div>
         </div>
@@ -156,7 +175,8 @@ export default function HomePage() {
 
           <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {/* Lead cell: wide, with its own miniature of the idea. */}
-            <article className="spotlight group relative overflow-hidden rounded-2xl border bg-card p-6 sm:col-span-2 sm:row-span-2">
+            <BlurFade inView className="sm:col-span-2 sm:row-span-2">
+              <article className="spotlight group relative h-full overflow-hidden rounded-2xl border bg-card p-6">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <LineChart className="h-5 w-5" />
               </div>
@@ -165,36 +185,43 @@ export default function HomePage() {
                 A 90-day forward view of every dirham. Recurring income, scheduled costs and cheques
                 folded into one honest line — so you see shortfalls weeks before they arrive.
               </p>
-              <div className="mt-6 rounded-xl border bg-background/60 p-4">
-                <MiniRunway />
-              </div>
-            </article>
+                <div className="mt-6 rounded-xl border bg-background/60 p-4">
+                  <MiniRunway />
+                </div>
+              </article>
+            </BlurFade>
 
-            <BentoCard
-              icon={<ScrollText className="h-5 w-5" />}
-              title="Post-dated cheques"
-              body="Track issued and received PDCs with due dates, clearing and bounce warnings. The UAE runs on cheques — Cashflow was built for them."
-            />
-            <BentoCard
-              icon={<Repeat className="h-5 w-5" />}
-              title="Recurring rules"
-              body="Salary, rent, subscriptions, tuition. Set the cadence once and every future occurrence flows into your projection."
-            />
-            <BentoCard
-              icon={<Coins className="h-5 w-5" />}
-              title="Multi-currency"
-              body="Hold AED, USD, KWD and more, each with correct decimals and your own rates — all rolling up to one base currency."
-            />
-            <BentoCard
-              icon={<PiggyBank className="h-5 w-5" />}
-              title="Provisions & buffers"
-              body="Earmark money for what's coming, and keep a safety buffer per account so you never dip into it by accident."
-            />
-            <BentoCard
-              icon={<BarChart3 className="h-5 w-5" />}
-              title="Reports that mean something"
-              body="Savings rate, cash runway, income vs. cost trends. Clear numbers you can act on, not a wall of charts."
-            />
+            {[
+              {
+                icon: <ScrollText className="h-5 w-5" />,
+                title: "Post-dated cheques",
+                body: "Track issued and received PDCs with due dates, clearing and bounce warnings. The UAE runs on cheques — Cashflow was built for them.",
+              },
+              {
+                icon: <Repeat className="h-5 w-5" />,
+                title: "Recurring rules",
+                body: "Salary, rent, subscriptions, tuition. Set the cadence once and every future occurrence flows into your projection.",
+              },
+              {
+                icon: <Coins className="h-5 w-5" />,
+                title: "Multi-currency",
+                body: "Hold AED, USD, KWD and more, each with correct decimals and your own rates — all rolling up to one base currency.",
+              },
+              {
+                icon: <PiggyBank className="h-5 w-5" />,
+                title: "Provisions & buffers",
+                body: "Earmark money for what's coming, and keep a safety buffer per account so you never dip into it by accident.",
+              },
+              {
+                icon: <BarChart3 className="h-5 w-5" />,
+                title: "Reports that mean something",
+                body: "Savings rate, cash runway, income vs. cost trends. Clear numbers you can act on, not a wall of charts.",
+              },
+            ].map((f, i) => (
+              <BlurFade key={f.title} inView delay={0.08 + i * 0.07}>
+                <BentoCard icon={f.icon} title={f.title} body={f.body} />
+              </BlurFade>
+            ))}
           </div>
         </div>
       </section>
@@ -312,7 +339,7 @@ export default function HomePage() {
 
 function BentoCard({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
   return (
-    <article className="spotlight rounded-2xl border bg-card p-6 transition-colors hover:border-primary/40">
+    <article className="spotlight h-full rounded-2xl border bg-card p-6 transition-colors hover:border-primary/40">
       <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
         {icon}
       </div>

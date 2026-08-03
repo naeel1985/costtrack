@@ -1,6 +1,7 @@
 import { format, differenceInCalendarDays } from "date-fns";
 import { AlertTriangle, ShieldCheck, TrendingUp, Wallet } from "lucide-react";
 import { Money } from "@/components/money";
+import { AnimatedMoney } from "@/components/animated-money";
 import { cn } from "@/lib/utils";
 import type { FreeSavingsPoint } from "@/lib/cashflow-timeline";
 import type { NextSalary } from "@/server/queries";
@@ -93,11 +94,12 @@ export function PoolHero({
             <Wallet className="h-4 w-4" /> Free-savings pool
           </div>
 
-          <Money
+          {/* The one figure worth animating on this page. */}
+          <AnimatedMoney
             minor={poolMinor}
             currency={currency}
             colored
-            className="mt-2 block text-4xl leading-tight font-bold tracking-tight sm:text-5xl"
+            className="mt-2 text-4xl leading-tight font-bold tracking-tight sm:text-5xl"
           />
 
           <p className="mt-1.5 text-xs text-muted-foreground">

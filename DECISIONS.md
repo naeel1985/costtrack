@@ -196,6 +196,34 @@ decisions:
   (`ADMIN_USERNAME/PASSWORD/EMAIL`) and creates a **verified demo user**
   (`demo@cashflow.local` / `DemoPass123!`) with the encrypted AED sample data.
 
+## Animation: `motion` + Magic UI, used sparingly
+
+- **`motion` (v12) is a runtime dependency**, in `dependencies` (not `dev`) like
+  everything else cPanel's production install must see. Nothing in
+  `DEPLOYMENT.md` argues against it: the constraints there are `--webpack` (a
+  symlink/Turbopack issue), build-time packages needing to survive a
+  `NODE_ENV=production` install, and no workspaces. A client-side animation
+  library touches none of that.
+- **Magic UI components are vendored, not wrapped** — `npx shadcn add <url>`
+  copies source into `src/components/ui/`. They are ours to edit, and three have
+  local modifications, each marked with a comment saying why:
+  - `number-ticker` — dropped its hardcoded `text-black dark:text-white` (money
+    is coloured by sign here) and made it render the **final** value server-side.
+    Upstream ships `0` in the HTML until JS runs and the element scrolls into
+    view; for a balance, that is a wrong number presented as fact, and it stays
+    wrong with JS off.
+  - `animated-grid-pattern` — regenerating squares moved out of a `useEffect`
+    into React's "adjust state during render" pattern, because
+    `react-hooks/set-state-in-effect` is an enforced error in this repo.
+- **`components.json` was written by hand rather than by `shadcn init`.** Init
+  rewrites `globals.css`, which would have destroyed the CVD-validated chart
+  palette documented there. Re-run `md5sum` on that file after any `shadcn add`.
+- **Where animation is allowed.** Hero figures (the pool number) and the
+  marketing page. Not tables, not lists, not the charts — the projection chart
+  and runway strip stay server-rendered SVG, since they are geometry rather than
+  motion and gain nothing from a client runtime. `<Money>` stays the default;
+  `<AnimatedMoney>` is opt-in for a single headline figure.
+
 ## Deferred (sensible next steps, intentionally out of scope for now)
 
 - Optional PIN gate (schema field `AppSetting.pinHash` exists; no UI yet).
