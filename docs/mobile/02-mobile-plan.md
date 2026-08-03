@@ -130,6 +130,7 @@ existing query** — no engine logic is re-implemented.
 | `GET /api/v1/auth/me` | `getAuth` | validate stored token on launch |
 | `GET /api/v1/dashboard?horizonDays=90` | `getDashboard` | the big one — accounts, projection, timeline, obligations, free-savings pool (`poolMinor`, `nextSalary`, `nextCardDue`, `nextCheque`, `nextProvision`, `provisionalPoolAtNextSalaryMinor` — superseded `salaryPeriod`, see DECISIONS.md) |
 | `GET /api/v1/accounts` | `getAccountsWithBalances` | |
+| `GET /api/v1/cards` | `getCreditCardStatements` | credit cards with their billed statements. Each statement carries `totalAmountDueMinor` (what the bill says — always the sum of its `items`, paid or not), `broughtForwardMinor`, `paidMinor` and `remainingMinor`. Bill from the charges, show `remainingMinor` as what's still owed — never re-derive a bill from the card balance |
 | `GET /api/v1/transactions?type&accountId&from&to&search` | `getTransactions` | capped at 500 as today |
 | `GET /api/v1/obligations?horizonDays=90` | `getUpcomingObligations` | |
 | `GET /api/v1/income/schedule` | `getRecurringIncomeSchedule` | the Debit table data |

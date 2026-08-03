@@ -47,7 +47,7 @@ import {
   type CashflowTimeline,
   type DatedAmount,
 } from "@/lib/cashflow-timeline";
-import { upcomingStatements } from "@/lib/card-cycle";
+import { nextDueDate, statementBucketDue, upcomingStatements } from "@/lib/card-cycle";
 import {
   buildNotifications,
   type NotificationItem,
@@ -839,6 +839,157 @@ export async function getTransactions(filters: TransactionFilters = {}) {
   }
   if (filters.tag) mapped = mapped.filter((t) => t.tagList.includes(filters.tag!));
   return mapped;
+}
+
+export interface CardStatementItem {
+  date: Date;
+  amountMinor: number;
+  label: string;
+  /** A projected occurrence of a recurring rule, not a posted charge. */
+  recurring: boolean;
+}
+
+export interface CardStatementView {
+  statementDate: Date;
+  paymentDueDate: Date;
+  totalAmountDueMinor: number;
+  broughtForwardMinor: number;
+  paidMinor: number;
+  remainingMinor: number;
+  /** Always sums to totalAmountDueMinor. */
+  items: CardStatementItem[];
+}
+
+export interface CreditCardView {
+  id: string;
+  name: string;
+  currency: string;
+  owedMinor: number;
+  limitMinor: number | null;
+  dueDay: number | null;
+  /** Current cycle first, then future ones. */
+  statements: CardStatementView[];
+}
+
+/** How far ahead card statements are projected. */
+const CARD_STATEMENT_MONTHS = 12;
+
+/**
+ * Every credit card with its statements, each billed from its own charges and
+ * settled against real payments, plus the line items that sum to each bill.
+ *
+ * This is the single source for both the web Costs page and `/api/v1/cards`, so
+ * the two surfaces cannot drift — the itemisation is bucketed with the very same
+ * `statementBucketDue` the engine bills with.
+ */
+export async function getCreditCardStatements(): Promise<CreditCardView[]> {
+  const { user, dek } = await requireUser();
+  const accounts = await getAccountsWithBalances();
+  const cards = accounts.filter((a) => a.type === "credit_card");
+  if (cards.length === 0) return [];
+
+  const cardIds = cards.map((c) => c.id);
+  const [rawCharges, rules, paymentsByCard] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { userId: user.id, status: "posted", type: "expense", accountId: { in: cardIds } },
+      include: { category: true },
+    }),
+    getRecurringRules(),
+    getCardPayments(cardIds),
+  ]);
+  const charges = rawCharges.map((t) => decryptTransaction(t, dek));
+
+  const today = startOfDay(new Date());
+  const horizon = addMonths(today, CARD_STATEMENT_MONTHS);
+  // Reach back far enough that a recurring occurrence dated before today but
+  // still billing on the current statement is generated.
+  const chargeWindowStart = subMonths(today, 2);
+
+  return cards.map((card) => {
+    const posted = charges.filter((t) => t.accountId === card.id);
+    const cardRules = rules.filter((r) => r.type === "expense" && r.accountId === card.id && r.isActive);
+    const occurrencesOf = (r: (typeof cardRules)[number]) =>
+      expandRecurrence(
+        {
+          frequency: r.frequency as never,
+          interval: r.interval,
+          startDate: r.startDate,
+          endDate: r.endDate,
+          occurrenceCount: r.occurrenceCount,
+        },
+        chargeWindowStart,
+        horizon,
+      );
+
+    const postedCharges = posted.map((t) => ({ date: t.date, amountMinor: t.amountMinor }));
+    const futureCharges =
+      card.dueDay != null
+        ? cardRules.flatMap((r) => occurrencesOf(r).map((date) => ({ date, amountMinor: r.amountMinor })))
+        : [];
+    const payments = paymentsByCard[card.id] ?? [];
+
+    const statements =
+      card.dueDay != null
+        ? upcomingStatements(
+            card.dueDay,
+            -card.balanceMinor, // signed: negative when the card is in credit
+            postedCharges,
+            futureCharges,
+            payments,
+            today,
+            horizon,
+          )
+        : [];
+
+    // Bucket line items exactly as the engine bills them.
+    const currentDue = card.dueDay != null ? nextDueDate(today, card.dueDay) : null;
+    const itemsByDue = new Map<number, CardStatementItem[]>();
+    const bucket = (item: CardStatementItem) => {
+      if (card.dueDay == null || currentDue == null) return;
+      const due = statementBucketDue(item.date, card.dueDay, currentDue).getTime();
+      const list = itemsByDue.get(due);
+      if (list) list.push(item);
+      else itemsByDue.set(due, [item]);
+    };
+    for (const t of posted) {
+      bucket({
+        date: t.date,
+        amountMinor: t.amountMinor,
+        label: t.note || t.category?.name || "Card charge",
+        recurring: false,
+      });
+    }
+    for (const r of cardRules) {
+      for (const date of occurrencesOf(r)) {
+        bucket({ date, amountMinor: r.amountMinor, label: r.name, recurring: true });
+      }
+    }
+
+    return {
+      id: card.id,
+      name: card.name,
+      currency: card.currency,
+      owedMinor: Math.max(0, -card.balanceMinor),
+      limitMinor: card.creditLimitMinor ?? null,
+      dueDay: card.dueDay ?? null,
+      statements: statements.map((s) => {
+        const items = [...(itemsByDue.get(s.paymentDueDate.getTime()) ?? [])].sort(
+          (a, b) => a.date.getTime() - b.date.getTime(),
+        );
+        // Opening/overdue debt has no charge of its own — surface it so the
+        // itemisation still adds up to the billed total.
+        if (s.broughtForwardMinor > 0) {
+          items.unshift({
+            date: s.statementDate,
+            amountMinor: s.broughtForwardMinor,
+            label: "Balance brought forward",
+            recurring: false,
+          });
+        }
+        return { ...s, items };
+      }),
+    };
+  });
 }
 
 /**

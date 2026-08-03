@@ -1,7 +1,7 @@
 import {
   getAccountsWithBalances,
-  getCardPayments,
   getCategories,
+  getCreditCardStatements,
   getDebitCardCycleSummary,
   getRecurringIncomeSchedule,
   getRecurringRules,
@@ -13,25 +13,22 @@ import { TransactionsView, type TxRow } from "@/components/transactions/transact
 import { RecurringSection, type RecurringRow } from "@/components/transactions/recurring-section";
 import { IncomeScheduleSection } from "@/components/transactions/income-schedule-section";
 import { CreditCardSection, DebitCardSection } from "@/components/transactions/card-sections";
-import { upcomingStatements, statementBucketDue, nextDueDate } from "@/lib/card-cycle";
 import { expandRecurrence } from "@/lib/projection";
-import { addMonths, endOfMonth, startOfMonth, subMonths } from "date-fns";
+import { endOfMonth, startOfMonth } from "date-fns";
 import type { AccountLite, CategoryLite } from "@/lib/view-types";
 
 export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
-  const [txs, categories, accounts, rules, incomeSchedule, debitCycle] = await Promise.all([
+  // Statements come from the shared server query — the same one /api/v1/cards
+  // serves the mobile app — so the two surfaces bill identically.
+  const [txs, categories, accounts, rules, incomeSchedule, debitCycle, cards] = await Promise.all([
     getTransactions({ type: kind }),
     getCategories(),
     getAccountsWithBalances(),
     getRecurringRules(),
     kind === "income" ? getRecurringIncomeSchedule() : Promise.resolve([]),
     kind === "expense" ? getDebitCardCycleSummary() : Promise.resolve(null),
+    kind === "expense" ? getCreditCardStatements() : Promise.resolve([]),
   ]);
-
-  // Payments are transfers into the card, so they're absent from the expense
-  // rows above — statements can't be settled without loading them separately.
-  const cardIds = accounts.filter((a) => a.type === "credit_card").map((a) => a.id);
-  const paymentsByCard = kind === "expense" ? await getCardPayments(cardIds) : {};
 
   const accountsLite: AccountLite[] = accounts.map((a) => ({
     id: a.id,
@@ -92,105 +89,7 @@ export async function LedgerPage({ kind }: { kind: "income" | "expense" }) {
   const assetAccounts = accountsLite.filter((a) => a.type !== "credit_card" && !a.isSystem);
   const baseCurrency = assetAccounts[0]?.currency ?? "AED";
 
-  // A card's balance is negative; what's owed is its magnitude. Each card gets
-  // its upcoming statements: the current issued bill (from posted charges) plus
-  // future bills built from recurring costs targeting the card, so a recurring
-  // charge shows up in the Total Amount Due of every cycle it lands in.
   const today = new Date();
-  const horizon = addMonths(today, 12);
-  // Reach back far enough that a recurring occurrence dated before today but
-  // still billing on the current (issued, unpaid) statement is generated —
-  // cardCycleBills drops anything that would land on an already-past due date.
-  const chargeWindowStart = subMonths(today, 2);
-  const cards = accounts
-    .filter((a) => a.type === "credit_card")
-    .map((a) => {
-      const owedMinor = Math.max(0, -a.balanceMinor);
-      const postedRows = rows.filter((r) => r.accountId === a.id);
-      const postedCharges = postedRows.map((r) => ({ date: r.date, amountMinor: r.amountMinor }));
-      // Recurring expense rules that draw on this card, expanded to occurrences.
-      const cardRules = rules.filter((r) => r.type === "expense" && r.accountId === a.id && r.isActive);
-      const futureCharges =
-        a.dueDay != null
-          ? cardRules.flatMap((r) =>
-              expandRecurrence(
-                {
-                  frequency: r.frequency as never,
-                  interval: r.interval,
-                  startDate: r.startDate,
-                  endDate: r.endDate,
-                  occurrenceCount: r.occurrenceCount,
-                },
-                chargeWindowStart,
-                horizon,
-              ).map((date) => ({ date, amountMinor: r.amountMinor })),
-            )
-          : [];
-      const payments = paymentsByCard[a.id] ?? [];
-      const statements =
-        a.dueDay != null
-          ? upcomingStatements(a.dueDay, -a.balanceMinor, postedCharges, futureCharges, payments, today, horizon)
-          : [];
-
-      // Itemize with the SAME bucketing the engine bills with, so a click on any
-      // statement total shows exactly the line items that sum to it.
-      const currentDue = a.dueDay != null ? nextDueDate(today, a.dueDay) : null;
-      const itemsByDue = new Map<
-        number,
-        { date: Date; amountMinor: number; label: string; recurring: boolean }[]
-      >();
-      const bucket = (item: { date: Date; amountMinor: number; label: string; recurring: boolean }) => {
-        if (a.dueDay == null || currentDue == null) return;
-        const due = statementBucketDue(item.date, a.dueDay, currentDue).getTime();
-        const list = itemsByDue.get(due);
-        if (list) list.push(item);
-        else itemsByDue.set(due, [item]);
-      };
-      for (const r of postedRows) {
-        bucket({ date: r.date, amountMinor: r.amountMinor, label: r.note || r.category?.name || "Card charge", recurring: false });
-      }
-      for (const r of cardRules) {
-        for (const date of expandRecurrence(
-          {
-            frequency: r.frequency as never,
-            interval: r.interval,
-            startDate: r.startDate,
-            endDate: r.endDate,
-            occurrenceCount: r.occurrenceCount,
-          },
-          chargeWindowStart,
-          horizon,
-        )) {
-          bucket({ date, amountMinor: r.amountMinor, label: r.name, recurring: true });
-        }
-      }
-
-      const statementsWithItems = statements.map((s) => {
-        const items = [...(itemsByDue.get(s.paymentDueDate.getTime()) ?? [])].sort(
-          (x, y) => x.date.getTime() - y.date.getTime(),
-        );
-        // Opening/overdue debt has no line of its own — show it so the
-        // itemisation still adds up to the billed total.
-        if (s.broughtForwardMinor > 0) {
-          items.unshift({
-            date: s.statementDate,
-            amountMinor: s.broughtForwardMinor,
-            label: "Balance brought forward",
-            recurring: false,
-          });
-        }
-        return { ...s, items };
-      });
-
-      return {
-        id: a.id,
-        name: a.name,
-        owedMinor,
-        limitMinor: a.creditLimitMinor ?? null,
-        dueDay: a.dueDay ?? null,
-        statements: statementsWithItems,
-      };
-    });
 
   // Card-linked recurring costs surface in the usage lists as this month's
   // projected occurrences — a debit rule on the 5th shows under Debit Card Usage,
