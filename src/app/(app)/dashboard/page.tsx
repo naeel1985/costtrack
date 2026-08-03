@@ -16,7 +16,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Money } from "@/components/money";
 import { AddTransactionButton } from "@/components/add-transaction-button";
 import { ObligationsList } from "@/components/dashboard/obligations-list";
-import { FreeSavingsPoolCard } from "@/components/dashboard/free-savings-pool-card";
+import { PoolHero } from "@/components/dashboard/pool-hero";
+import { RunwayRibbon } from "@/components/dashboard/runway-ribbon";
+import { NextUpList } from "@/components/dashboard/next-up-list";
 import { IncomeVsCostsCard } from "@/components/dashboard/income-vs-costs-card";
 import { FreeSavingsExplorer } from "@/components/dashboard/free-savings-explorer";
 import { ACCOUNT_TYPE_LABELS, type AccountType } from "@/lib/domain";
@@ -58,6 +60,31 @@ export default async function DashboardPage() {
         action={<AddTransactionButton size="sm" />}
       />
 
+      {/* The answer first: what's actually free, and whether it holds. */}
+      <PoolHero
+        poolMinor={poolMinor}
+        poolDryDate={poolDryDate}
+        poolDryAmountMinor={poolDryAmountMinor}
+        nextSalary={nextSalary}
+        provisionalPoolAtNextSalaryMinor={provisionalPoolAtNextSalaryMinor}
+        daily={timeline.daily}
+        currency={baseCurrency}
+      />
+
+      {/* Then the timing: everything committed, laid out on one track. */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <RunwayRibbon obligations={obligations} currency={baseCurrency} />
+        </div>
+        <NextUpList
+          nextSalary={nextSalary}
+          nextCardDue={nextCardDue}
+          nextCheque={nextCheque}
+          nextProvision={nextProvision}
+          currency={baseCurrency}
+        />
+      </div>
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard
           label="Net position"
@@ -93,27 +120,7 @@ export default async function DashboardPage() {
         />
       </div>
 
-      {/* The forward view: the shape of the year, and what's actually free. */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <IncomeVsCostsCard
-            cycles={timeline.cycles}
-            daily={timeline.daily}
-            currency={baseCurrency}
-          />
-        </div>
-        <FreeSavingsPoolCard
-          poolMinor={poolMinor}
-          nextSalary={nextSalary}
-          nextCardDue={nextCardDue}
-          nextCheque={nextCheque}
-          nextProvision={nextProvision}
-          provisionalPoolAtNextSalaryMinor={provisionalPoolAtNextSalaryMinor}
-          poolDryDate={poolDryDate}
-          poolDryAmountMinor={poolDryAmountMinor}
-          currency={baseCurrency}
-        />
-      </div>
+      <IncomeVsCostsCard cycles={timeline.cycles} daily={timeline.daily} currency={baseCurrency} />
 
       <FreeSavingsExplorer daily={timeline.daily} currency={baseCurrency} />
 
