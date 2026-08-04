@@ -48,18 +48,37 @@ Running log of the meaningful choices made while building Cashflow, and why.
 
 ## Free-savings pool
 
-- **The pool is a cumulative ledger, not a live projection.** *(Supersedes an
-  earlier fixed-30-day live-window model.)* Unlike the projection engine (which
-  recomputes from scratch on every read), the free-savings pool
-  (`packages/core/src/free-savings-pool.ts`) only changes when the user
-  explicitly **confirms a salary debit** (the existing recurring-income
-  "debit"/"undo" flow, `src/server/mutations/income.ts`). Confirming closes a
-  *cycle*: actual posted income minus actual posted/closed costs since the last
-  confirmation (including any credit-card statement that closed in the window)
-  is folded into the running pool, which is persisted (`FreeSavingsState`,
-  `FreeSavingsCycle` — encrypted, per-user) rather than derived. This matches
-  how the user actually thinks about "what's safely spendable": it doesn't wobble
-  with every pending/scheduled item, only with money that's actually landed.
+- **The pool's VALUE is live; the cycle ledger is its AUDIT TRAIL.** *(Supersedes
+  both an earlier fixed-30-day live-window model and, after it, a
+  cumulative-ledger model in which the headline figure was the last realized
+  cycle's closing value.)* The pool is what is actually free right now: every
+  asset balance folded from **posted** transactions. That is the figure on the
+  dashboard, the seed for the whole forward projection, and what the assistant
+  reports.
+
+  The snapshot model was wrong on its own terms. It froze the headline number
+  between salaries — a month of spending simply didn't show — and, worse, it fed
+  that stale figure into `buildCashflowTimeline` as `savingsMinor`, whose
+  contract is *today's* balance. Every downstream reading (run-dry date, pool at
+  next salary, the explorer) was therefore computed from a base that could be
+  weeks out of date. The original intent — "don't wobble with every
+  pending/scheduled item, only with money that's actually landed" — is fully
+  served by using posted transactions; freezing at the last salary went well
+  beyond it.
+
+  `FreeSavingsCycle` keeps its job: confirming a salary debit closes a cycle
+  (posted income minus posted/closed costs since the last confirmation,
+  including any credit-card statement that closed in the window) and records
+  what that period earned, spent and saved. That is a genuinely useful history —
+  it is just not the current value.
+- **The pool is answerable on any date, backwards and forwards.** `buildPoolTrail`
+  replays posted asset-account movements from the account's creation to
+  yesterday; `joinPoolSeries` lays the forward projection after it, rebasing the
+  projection's cumulative totals onto the trail's. The two halves meet exactly,
+  because the projection is seeded with today's live balance — which is the
+  trail's last value plus whatever posted today. One continuous series drives
+  the dashboard's "Free savings on any date" explorer, so "what was my pool on
+  12 March?" and "what will it be on 12 March?" are the same question.
 - **One recurring income rule is explicitly "the salary."**
   `RecurringRule.isSalary` (at most one `true` per user, enforced in
   `saveRecurringCore`) replaced an earlier implicit "any monthly-frequency
@@ -68,20 +87,18 @@ Running log of the meaningful choices made while building Cashflow, and why.
   cycle; other income (business/freelance, one-off) counts toward a cycle's
   income but never triggers one.
 - **The cycle ledger is the source of truth; `FreeSavingsState` is a cache.**
-  Both the anchor and the pool are read from the latest `FreeSavingsCycle` row
-  (`resolveFreeSavingsAnchor`, and the dashboard/history queries), never from
-  the state row — which is written alongside each cycle purely as a
-  single-row shortcut. A stale or orphaned state row therefore cannot pin the
-  pool to a value no cycle supports, and the whole thing self-heals.
-- **Before the first cycle, the pool is anchored to the account's creation
-  date**, not to "now": the anchor is `user.createdAt` and the seed value is the
-  asset balance *as of* that date. Anchoring on today (as this originally did)
-  had two failure modes — everything between account creation and the first
-  confirmation was silently swallowed, and confirming a back-dated salary
-  realized nothing at all, because `cycleEnd <= cycleStart` short-circuits.
-  Nothing is persisted until a cycle actually realizes, so dashboard reads still
-  fall back to today's live balance for *display* only, keeping the read/write
-  split (`CLAUDE.md` → Server Components read / Server Actions write) intact.
+  The cycle anchor is read from the latest `FreeSavingsCycle` row
+  (`resolveFreeSavingsAnchor`, `getDebitCardCycleSummary`), never from the state
+  row — which is written alongside each cycle purely as a single-row shortcut. A
+  stale or orphaned state row therefore cannot pin anything to a value no cycle
+  supports, and the whole thing self-heals.
+- **Before the first cycle, the anchor is the account's creation date**, not
+  "now". Anchoring on today (as this originally did) had two failure modes —
+  everything between account creation and the first confirmation was silently
+  swallowed, and confirming a back-dated salary realized nothing at all, because
+  `cycleEnd <= cycleStart` short-circuits. Nothing is persisted until a cycle
+  actually realizes, keeping the read/write split (`CLAUDE.md` → Server
+  Components read / Server Actions write) intact even for this stateful feature.
 - **Income can only land in an asset account.** The pool excludes credit cards
   by definition, so a salary rule pointed at a card debits into a liability and
   vanishes from the pool entirely. Enforced in `saveRecurringCore` and

@@ -15,16 +15,16 @@ import { cn } from "@/lib/utils";
 import type { FreeSavingsHistory } from "@/server/queries";
 
 /**
- * Where the pool came from, back to the account's creation.
+ * How the pool got to where it is, salary cycle by salary cycle, back to the
+ * account's creation.
  *
- * The pool is a cumulative ledger, so its current value is only meaningful
- * alongside the cycles that produced it: each confirmed salary folds one
- * cycle's income minus costs into the running total. This lists them oldest
- * first, ending at today.
+ * The figure itself is always live (every posted movement across cash and bank
+ * accounts) — this is the breakdown behind it: what each salary period earned,
+ * what it spent, and what it left. For the pool's value on a specific date, the
+ * dashboard's "Free savings on any date" explorer scrubs the whole span.
  *
- * When nothing has closed yet it says so plainly rather than showing an empty
- * table — the figure on the card is then a live balance, not a realized ledger,
- * and that distinction matters.
+ * When no cycle has closed yet it says so plainly rather than showing an empty
+ * table.
  */
 export function PoolHistoryDialog({
   history,
@@ -59,15 +59,13 @@ export function PoolHistoryDialog({
               <Wallet className="h-4 w-4" /> Free-savings pool · history
             </DialogTitle>
             <DialogDescription>
-              Since your account opened on {format(accountCreatedAt, "d MMM yyyy")}. The pool moves
-              only when a confirmed salary closes a cycle.
+              Since your account opened on {format(accountCreatedAt, "d MMM yyyy")}. Each confirmed
+              salary closes a cycle and records what it earned against what it cost.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex items-baseline justify-between gap-3 rounded-lg bg-muted/50 px-3.5 py-3">
-            <span className="text-sm text-muted-foreground">
-              {realized ? "Pool today" : "Live balance today"}
-            </span>
+            <span className="text-sm text-muted-foreground">Pool today</span>
             <Money minor={poolMinor} currency={currency} colored className="text-xl font-bold" />
           </div>
 
@@ -78,9 +76,9 @@ export function PoolHistoryDialog({
                 <div className="text-xs">
                   <div className="font-semibold">No cycle has closed yet</div>
                   <p className="mt-1 text-muted-foreground">
-                    The pool becomes a running ledger the first time you confirm a salary debit.
-                    Until then the figure above is simply your current balance across cash and bank
-                    accounts — useful, but not yet the cumulative pool.
+                    The figure above is live either way — it tracks every posted movement across
+                    your cash and bank accounts. Confirming a salary debit adds the per-cycle
+                    breakdown: what that period earned, what it cost, and what it saved.
                   </p>
                 </div>
               </div>

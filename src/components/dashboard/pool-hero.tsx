@@ -106,15 +106,8 @@ export function PoolHero({
               colored
               className="mt-2 text-4xl leading-tight font-bold tracking-tight sm:text-5xl"
             />
-            {/* Say which date the figure actually belongs to. A realized pool
-                is a snapshot taken at the last confirmed salary — it does not
-                move again until the next one — so claiming "as of today" would
-                misdescribe it. */}
             <span className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
-              {history.realized
-                ? `At your last salary · ${format(history.anchorDate, "d MMM yyyy")}`
-                : `As of ${format(new Date(), "d MMM yyyy")}`}{" "}
-              · see how it was built
+              As of {format(new Date(), "d MMM yyyy")} · see how it was built
               <History className="h-3 w-3 opacity-70" />
             </span>
           </PoolHistoryDialog>

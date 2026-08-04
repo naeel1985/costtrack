@@ -46,7 +46,9 @@ import {
   freeSavingsAt,
   type CashflowTimeline,
   type DatedAmount,
+  type FreeSavingsPoint,
 } from "@/lib/cashflow-timeline";
+import { buildPoolTrail, joinPoolSeries, type PostedMovement } from "@/lib/free-savings-pool";
 import { nextDueDate, statementBucketDue, upcomingStatements } from "@/lib/card-cycle";
 import {
   buildNotifications,
@@ -342,13 +344,13 @@ export interface NextProvision {
 }
 
 /**
- * Assemble the forward-looking dashboard view: the free-savings pool (the
- * realized ledger, or today's live balance if no cycle has been confirmed
- * yet), what's next (salary, card due, cheque, provision), a provisional pool
- * value at the next salary date, and the 2-year daily/cycle timeline. See
- * `lib/free-savings-pool.ts` for the pool's definitions. `accounts` is passed
- * in so we reuse the already-computed balances instead of re-folding the
- * ledger.
+ * Assemble the forward-looking dashboard view: the free-savings pool, what's
+ * next (salary, card due, cheque, provision), a provisional pool value at the
+ * next salary date, the 2-year daily/cycle timeline, and `poolSeries` — the
+ * pool's value on every day from the account's creation to the end of the
+ * horizon. See `lib/free-savings-pool.ts` for the pool's definitions.
+ * `accounts` is passed in so we reuse the already-computed balances instead of
+ * re-folding the ledger.
  */
 export async function loadForwardView(
   userId: string,
@@ -364,6 +366,10 @@ export async function loadForwardView(
   poolDryDate: Date | null;
   poolDryAmountMinor: number | null;
   timeline: CashflowTimeline;
+  /** The pool day by day: account creation → end of the horizon. */
+  poolSeries: FreeSavingsPoint[];
+  /** Where today sits in `poolSeries` (the first projected day). */
+  poolTodayIndex: number;
   creditCardOwedMinor: number;
   savingsMinor: number;
 }> {
@@ -378,7 +384,7 @@ export async function loadForwardView(
     .filter((a) => a.type === "credit_card" && a.dueDay != null)
     .map((a) => a.id);
 
-  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx, rawDebited, rawLastCycle] = await Promise.all([
+  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPosted, rawDebited, userRow] = await Promise.all([
     prisma.recurringRule.findMany({ where: { userId, isActive: true } }),
     prisma.pDC.findMany({ where: { userId, status: "pending", dueDate: { gte: today, lte: windowEnd } } }),
     prisma.provision.findMany({
@@ -390,20 +396,9 @@ export async function loadForwardView(
     prisma.transaction.findMany({
       where: { userId, status: "scheduled", date: { gte: today, lte: windowEnd } },
     }),
-    cardAccountIds.length
-      ? prisma.transaction.findMany({
-          where: {
-            userId,
-            status: "posted",
-            OR: [
-              // Charges to the card.
-              { type: "expense", accountId: { in: cardAccountIds } },
-              // Payments: a transfer whose destination is the card.
-              { type: "transfer", transferAccountId: { in: cardAccountIds } },
-            ],
-          },
-        })
-      : Promise.resolve([]),
+    // Every posted transaction: card charges/payments drive the statement
+    // cycles, and asset-account movements drive the pool's day-by-day past.
+    prisma.transaction.findMany({ where: { userId, status: "posted" } }),
     // Income occurrences already debited into an account (recurringRuleId/date are
     // plaintext, so no decryption needed) — excluded from the projected income so
     // a landed salary isn't counted both in savings and as a future event.
@@ -411,10 +406,8 @@ export async function loadForwardView(
       where: { userId, status: "posted", type: "income", recurringRuleId: { not: null } },
       select: { recurringRuleId: true, date: true },
     }),
-    // The realized pool — read from the append-only cycle ledger, which is the
-    // source of truth (`FreeSavingsState` is only a cache of this same row).
-    // Read-only here: realizing a cycle is a mutation-path job, never a query's.
-    prisma.freeSavingsCycle.findFirst({ where: { userId }, orderBy: { cycleEnd: "desc" } }),
+    // Where the pool's history starts.
+    prisma.user.findUnique({ where: { id: userId }, select: { createdAt: true } }),
   ]);
 
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
@@ -422,15 +415,17 @@ export async function loadForwardView(
   for (const t of rawDebited) if (t.recurringRuleId) debited.add(occurrenceKey(t.recurringRuleId, t.date));
   const notDebited = (ruleId: string) => (date: Date) => !debited.has(occurrenceKey(ruleId, date));
 
+  const postedTx = rawPosted.map((t) => decryptTransaction(t, dek));
+
   // Posted card spend and card payments, grouped by card. Payments are transfers
   // INTO the card, so they key off transferAccountId, not accountId.
+  const cardIdSet = new Set(cardAccountIds);
   const postedByCard = new Map<string, DatedAmount[]>();
   const paymentsByCard = new Map<string, DatedAmount[]>();
-  for (const raw of rawPostedCardTx) {
-    const t = decryptTransaction(raw, dek);
+  for (const t of postedTx) {
     const isPayment = t.type === "transfer";
-    const cardId = isPayment ? t.transferAccountId : t.accountId;
-    if (!cardId) continue;
+    const cardId = isPayment ? t.transferAccountId : t.type === "expense" ? t.accountId : null;
+    if (!cardId || !cardIdSet.has(cardId)) continue;
     const target = isPayment ? paymentsByCard : postedByCard;
     const list = target.get(cardId);
     if (list) list.push({ date: t.date, amountMinor: t.amountMinor });
@@ -567,10 +562,12 @@ export async function loadForwardView(
     }
   }
 
-  // The pool: the realized ledger if a cycle has ever closed, else today's live
-  // balance for display (realizing/persisting only ever happens inside the
-  // salary-debit mutation — see mutations/free-savings.ts).
-  const poolMinor = rawLastCycle ? decInt(rawLastCycle.poolAfterEnc, dek) : savingsMinor;
+  // The pool is what's actually free right now: every asset balance, folded
+  // from posted transactions. It is NOT the last realized cycle's closing
+  // figure — that is a snapshot taken at the previous salary, and using it here
+  // both froze the headline number and seeded the whole forward projection with
+  // a stale base. `FreeSavingsCycle` remains the per-cycle audit trail.
+  const poolMinor = savingsMinor;
 
   const timeline = buildCashflowTimeline({
     today,
@@ -581,6 +578,55 @@ export async function loadForwardView(
     cardBillEvents,
     months: POOL_TIMELINE_MONTHS,
   });
+
+  // ── The pool on any date, backwards as well as forwards ────────────────────
+  // The trail replays posted movements across asset accounts from the account's
+  // creation up to yesterday; today onwards is the projection above, seeded
+  // with today's live balance. Joined, they answer "what was/will be my pool on
+  // <date>?" across the user's whole history and horizon.
+  const assetIds = new Set(
+    accounts.filter((a) => !a.isSystem && a.type !== "credit_card").map((a) => a.id),
+  );
+  const trailFrom = startOfDay(userRow?.createdAt ?? today);
+  const trailTo = addDays(today, -1);
+  const movements: PostedMovement[] = [];
+  for (const t of postedTx) {
+    const from = assetIds.has(t.accountId) ? t.accountId : null;
+    const to = t.type === "transfer" && t.transferAccountId && assetIds.has(t.transferAccountId)
+      ? t.transferAccountId
+      : null;
+    if (t.type === "income") {
+      if (from) movements.push({ date: t.date, deltaMinor: t.amountMinor });
+    } else if (t.type === "expense") {
+      if (from) movements.push({ date: t.date, deltaMinor: -t.amountMinor });
+    } else if (t.type === "transfer") {
+      // Between two asset accounts the pool is unchanged, so both legs cancel;
+      // a leg touching a card is a real inflow/outflow for the pool.
+      if (from) {
+        movements.push({
+          date: t.date,
+          deltaMinor: -t.amountMinor,
+          cardPayment: t.transferAccountId ? cardIdSet.has(t.transferAccountId) : false,
+        });
+      }
+      if (to) movements.push({ date: t.date, deltaMinor: t.amountMinor });
+    }
+  }
+  const openingMinor = accounts
+    .filter((a) => assetIds.has(a.id))
+    .reduce((s, a) => s + a.openingBalanceMinor, 0);
+  const trail = buildPoolTrail({
+    from: trailFrom,
+    to: trailTo,
+    // Openings, plus anything backdated before the account existed.
+    openingMinor:
+      openingMinor +
+      movements
+        .filter((m) => startOfDay(m.date) < trailFrom)
+        .reduce((s, m) => s + m.deltaMinor, 0),
+    movements,
+  });
+  const poolSeries = joinPoolSeries(trail, timeline.daily);
 
   const creditCardOwedMinor = accounts
     .filter((a) => a.type === "credit_card")
@@ -611,6 +657,8 @@ export async function loadForwardView(
     poolDryDate,
     poolDryAmountMinor,
     timeline,
+    poolSeries,
+    poolTodayIndex: trail.length,
     creditCardOwedMinor,
     savingsMinor,
   };
@@ -635,6 +683,8 @@ export interface DashboardData {
   poolDryDate: Date | null;
   poolDryAmountMinor: number | null;
   timeline: CashflowTimeline;
+  poolSeries: FreeSavingsPoint[];
+  poolTodayIndex: number;
   creditCardOwedMinor: number;
   savingsMinor: number;
 }
@@ -679,6 +729,8 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
     poolDryDate,
     poolDryAmountMinor,
     timeline,
+    poolSeries,
+    poolTodayIndex,
     creditCardOwedMinor,
     savingsMinor,
   } = await loadForwardView(user.id, dek, accounts);
@@ -702,6 +754,8 @@ export async function getDashboard(horizonDays = 90): Promise<DashboardData> {
     poolDryDate,
     poolDryAmountMinor,
     timeline,
+    poolSeries,
+    poolTodayIndex,
     creditCardOwedMinor,
     savingsMinor,
   };
@@ -730,13 +784,18 @@ export async function getDebitCardCycleSummary(): Promise<DebitCycleSummary> {
   const { user, dek } = await requireUser();
   const today = startOfDay(new Date());
 
-  const [poolState, rawSalaryRule, accounts] = await Promise.all([
-    prisma.freeSavingsState.findUnique({ where: { userId: user.id } }),
+  const [lastCycle, userRow, rawSalaryRule, accounts] = await Promise.all([
+    // The anchor comes from the cycle ledger (the source of truth), not the
+    // `FreeSavingsState` cache — see DECISIONS.md.
+    prisma.freeSavingsCycle.findFirst({ where: { userId: user.id }, orderBy: { cycleEnd: "desc" } }),
+    prisma.user.findUnique({ where: { id: user.id }, select: { createdAt: true } }),
     prisma.recurringRule.findFirst({ where: { userId: user.id, type: "income", isSalary: true, isActive: true } }),
     getAccountsWithBalances(),
   ]);
 
-  const cycleStart = poolState ? poolState.anchorDate : today;
+  // Before any salary has closed a cycle, the current one runs from the day the
+  // account was opened.
+  const cycleStart = lastCycle?.cycleEnd ?? startOfDay(userRow?.createdAt ?? today);
   const assetAccountIds = accounts.filter((a) => a.type !== "credit_card" && !a.isSystem).map((a) => a.id);
 
   let nextSalaryDate: Date | null = null;
@@ -857,14 +916,11 @@ export interface FreeSavingsCycleRow {
 export interface FreeSavingsHistory {
   /** When the account was opened — where the pool's story starts. */
   accountCreatedAt: Date;
-  /** Every realized cycle, oldest first. */
+  /** Every closed salary cycle, oldest first. */
   cycles: FreeSavingsCycleRow[];
   /** Today's pool figure, matching the dashboard. */
   poolMinor: number;
-  /**
-   * False when no cycle has ever closed. The pool then falls back to live asset
-   * balances for display, so the figure is NOT yet a realized ledger.
-   */
+  /** False when no salary cycle has closed yet, so there is nothing to tabulate. */
   realized: boolean;
   /** Start of the cycle currently accruing (the last confirmation, or account open). */
   anchorDate: Date;
@@ -873,12 +929,14 @@ export interface FreeSavingsHistory {
 }
 
 /**
- * The pool's full history, back to the account's creation.
+ * The pool's cycle-by-cycle breakdown, back to the account's creation.
  *
- * Read-only: it reports the append-only `FreeSavingsCycle` ledger written by
- * the salary-debit mutation and never realizes a cycle itself. When nothing has
- * closed yet it says so rather than inventing a history, and reports whether a
- * missing salary flag is the reason.
+ * This is the audit trail — how much each salary period earned and spent — not
+ * the pool's value, which is always live (see `loadForwardView`). Read-only: it
+ * reports the append-only `FreeSavingsCycle` ledger written by the salary-debit
+ * mutation and never realizes a cycle itself. When nothing has closed yet it
+ * says so rather than inventing a history, and reports whether a missing salary
+ * flag is the reason.
  */
 export async function getFreeSavingsHistory(): Promise<FreeSavingsHistory> {
   const { user, dek } = await requireUser();
@@ -903,9 +961,9 @@ export async function getFreeSavingsHistory(): Promise<FreeSavingsHistory> {
     poolAfterMinor: decInt(c.poolAfterEnc, dek),
   }));
 
-  // Mirrors loadForwardView: the realized ledger if a cycle has closed, else
-  // today's live asset balance purely so the card has something to show.
-  const liveSavingsMinor = accounts
+  // The same live figure loadForwardView reports, so the dialog can never
+  // disagree with the card that opens it.
+  const poolMinor = accounts
     .filter((a) => !a.isSystem && a.type !== "credit_card")
     .reduce((s, a) => s + a.balanceMinor, 0);
 
@@ -913,7 +971,7 @@ export async function getFreeSavingsHistory(): Promise<FreeSavingsHistory> {
   return {
     accountCreatedAt,
     cycles,
-    poolMinor: last ? last.poolAfterMinor : liveSavingsMinor,
+    poolMinor,
     realized: last != null,
     anchorDate: last?.cycleEnd ?? accountCreatedAt,
     salaryRuleMissing: rawIncomeRules.length > 0 && !rawIncomeRules.some((r) => r.isSalary),

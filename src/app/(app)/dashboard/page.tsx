@@ -43,6 +43,8 @@ export default async function DashboardPage() {
     poolDryDate,
     poolDryAmountMinor,
     timeline,
+    poolSeries,
+    poolTodayIndex,
   } = dashboard;
 
   const runwayLabel =
@@ -123,7 +125,11 @@ export default async function DashboardPage() {
 
       <IncomeVsCostsCard cycles={timeline.cycles} daily={timeline.daily} currency={baseCurrency} />
 
-      <FreeSavingsExplorer daily={timeline.daily} currency={baseCurrency} />
+      <FreeSavingsExplorer
+        series={poolSeries}
+        todayIndex={poolTodayIndex}
+        currency={baseCurrency}
+      />
 
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">

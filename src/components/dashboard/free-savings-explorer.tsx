@@ -20,27 +20,32 @@ import { freeSavingsAt, type FreeSavingsPoint } from "@/lib/cashflow-timeline";
 import { cn } from "@/lib/utils";
 
 /**
- * Scrub to any day in the next 2 years and read the free-savings pool
- * provisioned for it, against the known costs committed by then. Both the
- * slider and the graph itself drive the selection — dragging or hovering the
- * chart moves the marker.
+ * Scrub to any day — back to the account's opening or forward two years — and
+ * read the free-savings pool on it. The series is continuous across today:
+ * before it, the pool as it actually ran from posted transactions; after it,
+ * the pool projected against every known cost. Both the slider and the graph
+ * drive the selection.
  *
- * A single series, so no legend (the title names it); only the selected day is
- * direct-labelled rather than labelling every point.
+ * A single series, so no legend (the title names it); only today and the
+ * selected day are direct-labelled rather than labelling every point.
  */
 export function FreeSavingsExplorer({
-  daily,
+  series,
+  todayIndex,
   currency,
 }: {
-  daily: FreeSavingsPoint[];
+  series: FreeSavingsPoint[];
+  /** Index of today — the boundary between recorded and projected. */
+  todayIndex: number;
   currency: string;
 }) {
-  const maxOffset = Math.max(0, daily.length - 1);
-  const [offset, setOffset] = React.useState(0);
+  const maxOffset = Math.max(0, series.length - 1);
+  const safeToday = Math.min(Math.max(0, todayIndex), maxOffset);
+  const [offset, setOffset] = React.useState(safeToday);
 
-  // Clamp if the series shrinks under us (e.g. after a revalidate).
+  // Clamp if the series shifts under us (e.g. after a revalidate, or at midnight).
   const safeOffset = Math.min(offset, maxOffset);
-  const point = freeSavingsAt(daily, safeOffset);
+  const point = freeSavingsAt(series, safeOffset);
 
   if (!point) {
     return (
@@ -52,7 +57,7 @@ export function FreeSavingsExplorer({
         </CardHeader>
         <CardContent>
           <p className="py-8 text-center text-sm text-muted-foreground">
-            Add accounts and recurring items to project your free-savings pool across the next 2 years.
+            Add accounts and recurring items to track your free-savings pool across time.
           </p>
         </CardContent>
       </Card>
@@ -60,12 +65,16 @@ export function FreeSavingsExplorer({
   }
 
   const date = new Date(point.t);
-  const today = new Date(daily[0].t);
-  const current = daily[0].freeSavingsMinor;
-  const change = point.freeSavingsMinor - current;
-  const low = daily.reduce((m, p) => (p.freeSavingsMinor < m.freeSavingsMinor ? p : m), daily[0]);
+  const today = new Date(series[safeToday].t);
+  const current = series[safeToday].freeSavingsMinor;
+  const isToday = safeOffset === safeToday;
+  const isPast = safeOffset < safeToday;
   const negative = point.freeSavingsMinor < 0;
-  const isToday = safeOffset === 0;
+
+  // Only the projection carries a warning — a dip that already happened is
+  // history, not something to act on.
+  const forward = series.slice(safeToday);
+  const low = forward.reduce((m, p) => (p.freeSavingsMinor < m.freeSavingsMinor ? p : m), forward[0]);
 
   return (
     <Card>
@@ -74,13 +83,13 @@ export function FreeSavingsExplorer({
           <CalendarSearch className="h-4 w-4" /> Free savings on any date
         </CardTitle>
         <p className="mt-1 text-sm text-muted-foreground">
-          Provisioned = today&apos;s free-savings pool + income received by the chosen day − known costs by
-          then. Drag the slider or hover the graph to any day in the next 2 years.
+          Up to today, what the pool actually was — every posted movement across your cash and bank
+          accounts. After today, today&apos;s pool + income received by the chosen day − known costs
+          by then. Drag the slider or hover the graph.
         </p>
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {/* Current vs projected, against the costs known by that date. */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="rounded-lg border bg-muted/40 px-3 py-2">
             <div className="text-xs text-muted-foreground">Free savings today</div>
@@ -93,7 +102,9 @@ export function FreeSavingsExplorer({
             )}
           >
             <div className="text-xs text-muted-foreground">
-              {isToday ? "Projected (today)" : `Projected · ${format(date, "d MMM yyyy")}`}
+              {isToday
+                ? "Today"
+                : `${isPast ? "Actual" : "Projected"} · ${format(date, "d MMM yyyy")}`}
             </div>
             <Money
               minor={point.freeSavingsMinor}
@@ -103,7 +114,7 @@ export function FreeSavingsExplorer({
             />
           </div>
           <div className="rounded-lg border px-3 py-2">
-            <div className="text-xs text-muted-foreground">Known costs by then</div>
+            <div className="text-xs text-muted-foreground">Costs by then</div>
             <Money minor={point.cumCostsMinor} currency={currency} className="text-lg font-semibold" />
           </div>
           <div className="rounded-lg border px-3 py-2">
@@ -125,15 +136,22 @@ export function FreeSavingsExplorer({
             className="scrubber"
           />
           <div className="flex justify-between text-[11px] text-muted-foreground">
-            <span>{format(today, "d MMM yyyy")}</span>
-            <span>{format(new Date(daily[maxOffset].t), "d MMM yyyy")}</span>
+            <span>{format(new Date(series[0].t), "d MMM yyyy")}</span>
+            <button
+              type="button"
+              onClick={() => setOffset(safeToday)}
+              className="rounded px-1 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              Today
+            </button>
+            <span>{format(new Date(series[maxOffset].t), "d MMM yyyy")}</span>
           </div>
         </div>
 
         <div className="h-[190px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
-              data={daily}
+              data={series}
               margin={{ top: 8, right: 8, left: 8, bottom: 0 }}
               // Hovering/dragging the plot scrubs it, same as the slider.
               onMouseMove={(state) => {
@@ -178,6 +196,21 @@ export function FreeSavingsExplorer({
                 isAnimationActive={false}
                 activeDot={false}
               />
+              {/* The recorded/projected boundary, so the two halves are never
+                  mistaken for each other. */}
+              {safeToday > 0 && (
+                <ReferenceLine
+                  x={today.getTime()}
+                  stroke="var(--muted-foreground)"
+                  strokeWidth={1}
+                  label={{
+                    value: "Today",
+                    position: "insideTopLeft",
+                    fill: "var(--muted-foreground)",
+                    fontSize: 11,
+                  }}
+                />
+              )}
               {/* The scrubbed day, direct-labelled instead of every point. */}
               <ReferenceLine x={point.t} stroke="var(--muted-foreground)" strokeDasharray="3 3" />
               {/* 2px surface ring so the marker reads over the area fill. */}
@@ -193,12 +226,14 @@ export function FreeSavingsExplorer({
           </ResponsiveContainer>
         </div>
 
-        <p className={cn("text-xs", negative ? "text-negative" : "text-muted-foreground")}>
-          {negative
-            ? `On ${format(date, "d MMM yyyy")} your known costs outrun savings and income by ${formatMoney(Math.abs(point.freeSavingsMinor), currency)}.`
-            : low.freeSavingsMinor < 0
-              ? `Dips to ${formatMoney(low.freeSavingsMinor, currency)} on ${format(new Date(low.t), "d MMM")} — free savings today, plus income, minus every known cost to that date.`
-              : "Free savings today, plus income received by this date, minus every known cost to it."}
+        <p className={cn("text-xs", negative && !isPast ? "text-negative" : "text-muted-foreground")}>
+          {isPast
+            ? `On ${format(date, "d MMM yyyy")} your free-savings pool actually stood at ${formatMoney(point.freeSavingsMinor, currency)}.`
+            : negative
+              ? `On ${format(date, "d MMM yyyy")} your known costs outrun savings and income by ${formatMoney(Math.abs(point.freeSavingsMinor), currency)}.`
+              : low.freeSavingsMinor < 0
+                ? `Dips to ${formatMoney(low.freeSavingsMinor, currency)} on ${format(new Date(low.t), "d MMM")} — free savings today, plus income, minus every known cost to that date.`
+                : "Free savings today, plus income received by this date, minus every known cost to it."}
         </p>
       </CardContent>
     </Card>
