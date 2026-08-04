@@ -5,7 +5,7 @@ import { AnimatedMoney } from "@/components/animated-money";
 import { PoolHistoryDialog } from "@/components/dashboard/pool-history-dialog";
 import { cn } from "@/lib/utils";
 import type { FreeSavingsPoint } from "@/lib/cashflow-timeline";
-import type { FreeSavingsHistory, NextSalary } from "@/server/queries";
+import type { NextSalary, PoolLedger } from "@/server/queries";
 
 /**
  * The dashboard's headline answer to "am I going to be okay?".
@@ -57,7 +57,7 @@ export function PoolHero({
   nextSalary,
   provisionalPoolAtNextSalaryMinor,
   daily,
-  history,
+  ledger,
   currency,
 }: {
   poolMinor: number;
@@ -66,7 +66,7 @@ export function PoolHero({
   nextSalary: NextSalary | null;
   provisionalPoolAtNextSalaryMinor: number | null;
   daily: FreeSavingsPoint[];
-  history: FreeSavingsHistory;
+  ledger: PoolLedger;
   currency: string;
 }) {
   const spark = buildSpark(daily);
@@ -97,9 +97,9 @@ export function PoolHero({
             <Wallet className="h-4 w-4" /> Free-savings pool
           </div>
 
-          {/* The one figure worth animating on this page. Click through for the
-              cycle-by-cycle ledger behind it. */}
-          <PoolHistoryDialog history={history} currency={currency}>
+          {/* The one figure worth animating on this page. Click through for
+              every movement that produced it. */}
+          <PoolHistoryDialog ledger={ledger} currency={currency}>
             <AnimatedMoney
               minor={poolMinor}
               currency={currency}
@@ -107,7 +107,7 @@ export function PoolHero({
               className="mt-2 text-4xl leading-tight font-bold tracking-tight sm:text-5xl"
             />
             <span className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
-              As of {format(new Date(), "d MMM yyyy")} · see how it was built
+              As of {format(new Date(), "d MMM yyyy")} · full history
               <History className="h-3 w-3 opacity-70" />
             </span>
           </PoolHistoryDialog>

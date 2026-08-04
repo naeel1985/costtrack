@@ -71,6 +71,14 @@ Running log of the meaningful choices made while building Cashflow, and why.
   including any credit-card statement that closed in the window) and records
   what that period earned, spent and saved. That is a genuinely useful history —
   it is just not the current value.
+- **The pool's history is an itemized ledger, not a summary.** Clicking the
+  dashboard figure opens every movement in and out — opening balance, income,
+  spending, credit-card payments — newest first, each with a running pool
+  balance (`getPoolLedger`). The running balance is computed server-side across
+  the whole history, so paging never changes a figure. Posted movements up to
+  today only: what is still expected belongs to the explorer below. A transfer
+  between two asset accounts is deliberately absent — both legs cancel, so it
+  never moved the pool.
 - **The pool is answerable on any date, backwards and forwards.** `buildPoolTrail`
   replays posted asset-account movements from the account's creation to
   yesterday; `joinPoolSeries` lays the forward projection after it, rebasing the

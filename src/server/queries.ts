@@ -901,80 +901,136 @@ export async function getTransactions(filters: TransactionFilters = {}) {
   return mapped;
 }
 
-export interface FreeSavingsCycleRow {
+export interface PoolLedgerRow {
   id: string;
-  cycleStart: Date;
-  cycleEnd: Date;
-  incomeMinor: number;
-  costsMinor: number;
-  /** income − costs; signed. */
-  savingsMinor: number;
-  /** The pool's value once this cycle was folded in; signed. */
-  poolAfterMinor: number;
+  date: Date;
+  /** What it was — the note, else the category, else a sensible fallback. */
+  label: string;
+  /** Which asset account it moved through, and (for card payments) where to. */
+  detail: string;
+  /** SIGNED: positive into the pool, negative out of it. */
+  deltaMinor: number;
+  /** The pool's value immediately after this row. */
+  balanceMinor: number;
+  /** Opening balances rather than a transaction — the row the pool starts from. */
+  opening?: boolean;
 }
 
-export interface FreeSavingsHistory {
-  /** When the account was opened — where the pool's story starts. */
+export interface PoolLedger {
+  /** When the account was opened. */
   accountCreatedAt: Date;
-  /** Every closed salary cycle, oldest first. */
-  cycles: FreeSavingsCycleRow[];
-  /** Today's pool figure, matching the dashboard. */
+  /** Every movement, newest first. The running balance is computed oldest-first,
+   *  so the newest row's balance is today's pool. */
+  rows: PoolLedgerRow[];
+  totalInMinor: number;
+  totalOutMinor: number;
+  /** Today's pool — identical to the dashboard's figure. */
   poolMinor: number;
-  /** False when no salary cycle has closed yet, so there is nothing to tabulate. */
-  realized: boolean;
-  /** Start of the cycle currently accruing (the last confirmation, or account open). */
-  anchorDate: Date;
-  /** True when income rules exist but none is flagged as salary — no cycle can close. */
-  salaryRuleMissing: boolean;
 }
 
 /**
- * The pool's cycle-by-cycle breakdown, back to the account's creation.
+ * Every movement in and out of the free-savings pool, back to the account's
+ * opening balances.
  *
- * This is the audit trail — how much each salary period earned and spent — not
- * the pool's value, which is always live (see `loadForwardView`). Read-only: it
- * reports the append-only `FreeSavingsCycle` ledger written by the salary-debit
- * mutation and never realizes a cycle itself. When nothing has closed yet it
- * says so rather than inventing a history, and reports whether a missing salary
- * flag is the reason.
+ * The pool is the total of the asset accounts, so this is exactly the set of
+ * posted transactions that touched one: income in, spending out, and transfers
+ * out to a credit card (a transfer between two asset accounts nets to nothing
+ * and is therefore not a pool movement at all). Running the list from the
+ * opening balances reproduces today's pool to the fils — that is the point of
+ * showing it.
  */
-export async function getFreeSavingsHistory(): Promise<FreeSavingsHistory> {
+export async function getPoolLedger(): Promise<PoolLedger> {
   const { user, dek } = await requireUser();
 
-  // The session carries identity, not the row — read createdAt for the start of
-  // the pool's story.
-  const [row, rawCycles, rawIncomeRules, accounts] = await Promise.all([
+  // Up to today only: this is what HAS moved, not what is expected to. (The
+  // "Free savings on any date" explorer is where the future lives.)
+  const endOfToday = new Date(startOfDay(new Date()).getTime() + 86_400_000 - 1);
+
+  const [userRow, rawAccounts, rawTx] = await Promise.all([
     prisma.user.findUnique({ where: { id: user.id }, select: { createdAt: true } }),
-    prisma.freeSavingsCycle.findMany({ where: { userId: user.id }, orderBy: { cycleEnd: "asc" } }),
-    prisma.recurringRule.findMany({ where: { userId: user.id, type: "income", isActive: true } }),
-    getAccountsWithBalances(),
+    prisma.account.findMany({ where: { userId: user.id, isArchived: false } }),
+    prisma.transaction.findMany({
+      where: { userId: user.id, status: "posted", date: { lte: endOfToday } },
+      include: { account: true, transferAccount: true, category: true },
+      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+    }),
   ]);
-  const accountCreatedAt = row?.createdAt ?? new Date();
 
-  const cycles: FreeSavingsCycleRow[] = rawCycles.map((c) => ({
-    id: c.id,
-    cycleStart: c.cycleStart,
-    cycleEnd: c.cycleEnd,
-    incomeMinor: decInt(c.incomeEnc, dek),
-    costsMinor: decInt(c.costsEnc, dek),
-    savingsMinor: decInt(c.savingsEnc, dek),
-    poolAfterMinor: decInt(c.poolAfterEnc, dek),
-  }));
+  const accounts = rawAccounts.map((a) => decryptAccount(a, dek));
+  const assets = accounts.filter((a) => a.type !== "credit_card" && !a.isSystem);
+  const assetIds = new Set(assets.map((a) => a.id));
+  const accountCreatedAt = userRow?.createdAt ?? new Date();
 
-  // The same live figure loadForwardView reports, so the dialog can never
-  // disagree with the card that opens it.
-  const poolMinor = accounts
-    .filter((a) => !a.isSystem && a.type !== "credit_card")
-    .reduce((s, a) => s + a.balanceMinor, 0);
+  const openingMinor = assets.reduce((s, a) => s + a.openingBalanceMinor, 0);
+  let running = openingMinor;
+  const chronological: PoolLedgerRow[] = [
+    {
+      id: "opening",
+      date: accountCreatedAt,
+      label: "Opening balance",
+      detail: assets.map((a) => a.name).join(", ") || "No accounts yet",
+      deltaMinor: openingMinor,
+      balanceMinor: openingMinor,
+      opening: true,
+    },
+  ];
 
-  const last = cycles[cycles.length - 1];
+  for (const raw of rawTx) {
+    const t = decryptTransaction(raw, dek);
+    const fromPool = assetIds.has(t.accountId);
+    const intoPool = t.type === "transfer" && !!t.transferAccountId && assetIds.has(t.transferAccountId);
+
+    // Between two asset accounts the pool is unchanged — both legs cancel, so
+    // it is not a movement of the pool and doesn't belong in this list.
+    if (t.type === "transfer" && fromPool && intoPool) continue;
+
+    let deltaMinor: number;
+    let detail: string;
+    if (t.type === "income" && fromPool) {
+      deltaMinor = t.amountMinor;
+      detail = `into ${t.account?.name ?? "account"}`;
+    } else if (t.type === "expense" && fromPool) {
+      deltaMinor = -t.amountMinor;
+      detail = `from ${t.account?.name ?? "account"}`;
+    } else if (t.type === "transfer" && fromPool) {
+      deltaMinor = -t.amountMinor;
+      detail = `${t.account?.name ?? "account"} → ${t.transferAccount?.name ?? "elsewhere"}`;
+    } else if (intoPool) {
+      deltaMinor = t.amountMinor;
+      detail = `${t.account?.name ?? "elsewhere"} → ${t.transferAccount?.name ?? "account"}`;
+    } else {
+      continue; // never touched an asset account (e.g. a credit-card charge)
+    }
+
+    running += deltaMinor;
+    chronological.push({
+      id: t.id,
+      date: t.date,
+      label:
+        t.note?.trim() ||
+        t.category?.name ||
+        (t.type === "transfer"
+          ? t.transferAccount?.type === "credit_card"
+            ? "Credit-card payment"
+            : "Transfer"
+          : t.type === "income"
+            ? "Income"
+            : "Expense"),
+      detail,
+      deltaMinor,
+      balanceMinor: running,
+    });
+  }
+
+  const totalInMinor = chronological.reduce((s, r) => (r.deltaMinor > 0 ? s + r.deltaMinor : s), 0);
+  const totalOutMinor = chronological.reduce((s, r) => (r.deltaMinor < 0 ? s - r.deltaMinor : s), 0);
+
   return {
     accountCreatedAt,
-    cycles,
-    poolMinor,
-    realized: last != null,
-    anchorDate: last?.cycleEnd ?? accountCreatedAt,
-    salaryRuleMissing: rawIncomeRules.length > 0 && !rawIncomeRules.some((r) => r.isSalary),
+    rows: chronological.reverse(),
+    totalInMinor,
+    totalOutMinor,
+    poolMinor: running,
   };
 }
 
