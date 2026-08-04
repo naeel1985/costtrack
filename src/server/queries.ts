@@ -378,7 +378,7 @@ export async function loadForwardView(
     .filter((a) => a.type === "credit_card" && a.dueDay != null)
     .map((a) => a.id);
 
-  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx, rawDebited, rawPoolState] = await Promise.all([
+  const [rawRules, rawPdcs, rawProvisions, rawScheduled, rawPostedCardTx, rawDebited, rawLastCycle] = await Promise.all([
     prisma.recurringRule.findMany({ where: { userId, isActive: true } }),
     prisma.pDC.findMany({ where: { userId, status: "pending", dueDate: { gte: today, lte: windowEnd } } }),
     prisma.provision.findMany({
@@ -411,9 +411,10 @@ export async function loadForwardView(
       where: { userId, status: "posted", type: "income", recurringRuleId: { not: null } },
       select: { recurringRuleId: true, date: true },
     }),
-    // The realized pool ledger — read-only here. Bootstrapping (a write) only
-    // happens inside the salary-debit mutation, never from a query.
-    prisma.freeSavingsState.findUnique({ where: { userId } }),
+    // The realized pool — read from the append-only cycle ledger, which is the
+    // source of truth (`FreeSavingsState` is only a cache of this same row).
+    // Read-only here: realizing a cycle is a mutation-path job, never a query's.
+    prisma.freeSavingsCycle.findFirst({ where: { userId }, orderBy: { cycleEnd: "desc" } }),
   ]);
 
   const rules = rawRules.map((r) => decryptRecurring(r, dek));
@@ -567,9 +568,9 @@ export async function loadForwardView(
   }
 
   // The pool: the realized ledger if a cycle has ever closed, else today's live
-  // balance for display (bootstrapping/persisting only ever happens inside the
+  // balance for display (realizing/persisting only ever happens inside the
   // salary-debit mutation — see mutations/free-savings.ts).
-  const poolMinor = rawPoolState ? decInt(rawPoolState.poolEnc, dek) : savingsMinor;
+  const poolMinor = rawLastCycle ? decInt(rawLastCycle.poolAfterEnc, dek) : savingsMinor;
 
   const timeline = buildCashflowTimeline({
     today,
@@ -884,10 +885,9 @@ export async function getFreeSavingsHistory(): Promise<FreeSavingsHistory> {
 
   // The session carries identity, not the row — read createdAt for the start of
   // the pool's story.
-  const [row, rawCycles, state, rawIncomeRules, accounts] = await Promise.all([
+  const [row, rawCycles, rawIncomeRules, accounts] = await Promise.all([
     prisma.user.findUnique({ where: { id: user.id }, select: { createdAt: true } }),
     prisma.freeSavingsCycle.findMany({ where: { userId: user.id }, orderBy: { cycleEnd: "asc" } }),
-    prisma.freeSavingsState.findUnique({ where: { userId: user.id } }),
     prisma.recurringRule.findMany({ where: { userId: user.id, type: "income", isActive: true } }),
     getAccountsWithBalances(),
   ]);
@@ -909,12 +909,13 @@ export async function getFreeSavingsHistory(): Promise<FreeSavingsHistory> {
     .filter((a) => !a.isSystem && a.type !== "credit_card")
     .reduce((s, a) => s + a.balanceMinor, 0);
 
+  const last = cycles[cycles.length - 1];
   return {
     accountCreatedAt,
     cycles,
-    poolMinor: state ? decInt(state.poolEnc, dek) : liveSavingsMinor,
-    realized: state != null,
-    anchorDate: state?.anchorDate ?? accountCreatedAt,
+    poolMinor: last ? last.poolAfterMinor : liveSavingsMinor,
+    realized: last != null,
+    anchorDate: last?.cycleEnd ?? accountCreatedAt,
     salaryRuleMissing: rawIncomeRules.length > 0 && !rawIncomeRules.some((r) => r.isSalary),
   };
 }

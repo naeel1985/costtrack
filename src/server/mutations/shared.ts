@@ -17,6 +17,23 @@ export async function assertOwnsAccounts(userId: string, ids: (string | null | u
   if (count !== wanted.length) throw new Error("Account not found");
 }
 
+/**
+ * Income lands as spendable cash, so it can only target an asset account — a
+ * credit card is a liability, and money "paid into" one is invisible to the
+ * free-savings pool (which excludes cards by definition). Enforced here rather
+ * than only in the picker so the mobile API can't create the same orphan.
+ */
+export async function isCreditCardAccount(userId: string, accountId: string | null | undefined) {
+  if (!accountId) return false;
+  const found = await prisma.account.count({
+    where: { id: accountId, userId, type: "credit_card" },
+  });
+  return found > 0;
+}
+
+export const INCOME_ON_CARD_ERROR =
+  "Income must land in a cash or bank account — a credit card can't hold savings.";
+
 export async function assertOwnsCategory(userId: string, categoryId: string | null | undefined) {
   if (!categoryId) return;
   const found = await prisma.category.count({ where: { userId, id: categoryId } });

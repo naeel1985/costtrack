@@ -67,13 +67,26 @@ Running log of the meaningful choices made while building Cashflow, and why.
   one monthly income stream. Only confirming *that* rule's occurrence closes a
   cycle; other income (business/freelance, one-off) counts toward a cycle's
   income but never triggers one.
-- **Bootstrapping reads current balances, never writes from a query.** The pool
-  is lazily created the first time a salary is confirmed, seeded from the
-  user's asset-account balances at that moment (`getOrCreateFreeSavingsState`,
-  called only from the mutation path). Dashboard reads fall back to today's live
-  balance for *display* when no pool row exists yet, but never persist it —
-  keeping the read/write split (`CLAUDE.md` → Server Components read / Server
-  Actions write) intact even for this stateful feature.
+- **The cycle ledger is the source of truth; `FreeSavingsState` is a cache.**
+  Both the anchor and the pool are read from the latest `FreeSavingsCycle` row
+  (`resolveFreeSavingsAnchor`, and the dashboard/history queries), never from
+  the state row — which is written alongside each cycle purely as a
+  single-row shortcut. A stale or orphaned state row therefore cannot pin the
+  pool to a value no cycle supports, and the whole thing self-heals.
+- **Before the first cycle, the pool is anchored to the account's creation
+  date**, not to "now": the anchor is `user.createdAt` and the seed value is the
+  asset balance *as of* that date. Anchoring on today (as this originally did)
+  had two failure modes — everything between account creation and the first
+  confirmation was silently swallowed, and confirming a back-dated salary
+  realized nothing at all, because `cycleEnd <= cycleStart` short-circuits.
+  Nothing is persisted until a cycle actually realizes, so dashboard reads still
+  fall back to today's live balance for *display* only, keeping the read/write
+  split (`CLAUDE.md` → Server Components read / Server Actions write) intact.
+- **Income can only land in an asset account.** The pool excludes credit cards
+  by definition, so a salary rule pointed at a card debits into a liability and
+  vanishes from the pool entirely. Enforced in `saveRecurringCore` and
+  `saveTransactionCore` (not just the picker) so the mobile API can't create the
+  same orphan.
 - **Credit-card cost for a cycle = the statement due in that window**, sourced
   via the same `nextStatement` the dashboard/AI tool already use for "next
   payment due" — not re-derived by bucketing individual charges. Simpler, and

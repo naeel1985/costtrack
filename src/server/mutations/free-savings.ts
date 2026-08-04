@@ -9,31 +9,49 @@ import type { DatedAmount } from "@/lib/cashflow-timeline";
 import type { AuthContext } from "@/server/auth";
 
 /**
- * The current free-savings pool state, bootstrapping it (from today's asset
- * balances) the first time it's needed for a user. Pool accounts are every
- * asset account (cash/bank) — never credit cards, never archived/system rows.
+ * Where the next cycle starts and what the pool is worth going into it.
+ *
+ * The append-only `FreeSavingsCycle` ledger is the source of truth: the anchor
+ * is simply the latest realized cycle's end, and the pool its closing value.
+ * `FreeSavingsState` is a cache of that same row (written alongside it), so it
+ * is deliberately not read here — a stale or orphaned state row can never drag
+ * the ledger out of line.
+ *
+ * Before any cycle has closed, the story starts where the account does: the
+ * anchor is the user's creation date and the pool is their asset balance *as of
+ * that date* (openings plus anything backdated before it). Anchoring on "today"
+ * instead — as this used to — silently swallowed everything between account
+ * creation and the first confirmation, and made the first confirmation of a
+ * back-dated salary realize nothing at all.
+ *
+ * Read-only: nothing is persisted until a cycle actually realizes.
  */
-export async function getOrCreateFreeSavingsState(
+export async function resolveFreeSavingsAnchor(
   userId: string,
   dek: Buffer,
 ): Promise<{ poolMinor: number; anchorDate: Date }> {
-  const existing = await prisma.freeSavingsState.findUnique({ where: { userId } });
-  if (existing) return { poolMinor: decInt(existing.poolEnc, dek), anchorDate: existing.anchorDate };
+  const latest = await prisma.freeSavingsCycle.findFirst({
+    where: { userId },
+    orderBy: { cycleEnd: "desc" },
+  });
+  if (latest) {
+    return { poolMinor: decInt(latest.poolAfterEnc, dek), anchorDate: latest.cycleEnd };
+  }
 
-  const [rawAccounts, rawTx] = await Promise.all([
+  const [user, rawAccounts, rawTx] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { createdAt: true } }),
     prisma.account.findMany({ where: { userId, isArchived: false } }),
     prisma.transaction.findMany({ where: { userId, status: "posted" } }),
   ]);
   const accounts = rawAccounts.map((a) => decryptAccount(a, dek));
   const txs = rawTx.map((t) => decryptTransaction(t, dek));
+  // Pool accounts are every asset account (cash/bank) — never credit cards,
+  // never archived/system rows.
   const assetAccounts = accounts.filter((a) => a.type !== "credit_card" && !a.isSystem);
-  const balances = computeBalances(assetAccounts, txs);
+  const anchorDate = startOfDay(user.createdAt);
+  const balances = computeBalances(assetAccounts, txs, anchorDate);
   const poolMinor = assetAccounts.reduce((s, a) => s + (balances[a.id] ?? a.openingBalanceMinor), 0);
-  const anchorDate = startOfDay(new Date());
 
-  await prisma.freeSavingsState.create({
-    data: { userId, poolEnc: encInt(poolMinor, dek), anchorDate },
-  });
   return { poolMinor, anchorDate };
 }
 
@@ -47,7 +65,7 @@ export async function getOrCreateFreeSavingsState(
 export async function realizeSalaryCycle(auth: AuthContext, ruleId: string, cycleEndRaw: Date): Promise<void> {
   const { user, dek } = auth;
   const cycleEnd = startOfDay(cycleEndRaw);
-  const state = await getOrCreateFreeSavingsState(user.id, dek);
+  const state = await resolveFreeSavingsAnchor(user.id, dek);
   const cycleStart = state.anchorDate;
   if (cycleEnd <= cycleStart) return;
 
@@ -120,9 +138,16 @@ export async function realizeSalaryCycle(auth: AuthContext, ruleId: string, cycl
         poolAfterEnc: encInt(result.poolAfterMinor, dek),
       },
     }),
-    prisma.freeSavingsState.update({
+    // The cache of the row above — created on the first realization, so it can
+    // never exist without a cycle behind it.
+    prisma.freeSavingsState.upsert({
       where: { userId: user.id },
-      data: { poolEnc: encInt(result.poolAfterMinor, dek), anchorDate: result.cycleEnd },
+      create: {
+        userId: user.id,
+        poolEnc: encInt(result.poolAfterMinor, dek),
+        anchorDate: result.cycleEnd,
+      },
+      update: { poolEnc: encInt(result.poolAfterMinor, dek), anchorDate: result.cycleEnd },
     }),
   ]);
 }
@@ -147,12 +172,18 @@ export async function reverseSalaryCycleIfLatest(auth: AuthContext, ruleId: stri
   const savingsMinor = decInt(latest.savingsEnc, dek);
   const poolAfterMinor = decInt(latest.poolAfterEnc, dek);
   const poolBeforeMinor = poolAfterMinor - savingsMinor;
+  const cycleCount = await prisma.freeSavingsCycle.count({ where: { userId: user.id } });
 
   await prisma.$transaction([
     prisma.freeSavingsCycle.delete({ where: { id: latest.id } }),
-    prisma.freeSavingsState.update({
-      where: { userId: user.id },
-      data: { poolEnc: encInt(poolBeforeMinor, dek), anchorDate: latest.cycleStart },
-    }),
+    // Undoing the only cycle takes the pool back to never-realized, so the
+    // cache goes with it — leaving it behind would pin the anchor to a cycle
+    // that no longer exists.
+    cycleCount > 1
+      ? prisma.freeSavingsState.update({
+          where: { userId: user.id },
+          data: { poolEnc: encInt(poolBeforeMinor, dek), anchorDate: latest.cycleStart },
+        })
+      : prisma.freeSavingsState.deleteMany({ where: { userId: user.id } }),
   ]);
 }

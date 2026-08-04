@@ -5,7 +5,13 @@ import { toMinor } from "@/lib/money";
 import { recurringSchema } from "@/lib/schemas";
 import { encInt, encNull, encStr } from "@/server/crypto-map";
 import type { AuthContext } from "@/server/auth";
-import { assertOwnsAccounts, assertOwnsCategory, computeNextRunDate } from "./shared";
+import {
+  INCOME_ON_CARD_ERROR,
+  assertOwnsAccounts,
+  assertOwnsCategory,
+  computeNextRunDate,
+  isCreditCardAccount,
+} from "./shared";
 import { zodFail, type MutationResult } from "./types";
 
 /**
@@ -25,6 +31,12 @@ export async function saveRecurringCore(auth: AuthContext, input: unknown): Prom
   const { user, dek } = auth;
   await assertOwnsAccounts(user.id, [data.accountId]);
   await assertOwnsCategory(user.id, data.categoryId);
+
+  // A salary rule pointed at a credit card debits into a liability, so the
+  // free-savings pool never sees the money — the rule has to land in cash.
+  if (data.type === "income" && (await isCreditCardAccount(user.id, data.accountId))) {
+    return { ok: false, error: INCOME_ON_CARD_ERROR, status: 400 };
+  }
 
   // Only an income rule can be THE salary; at most one per user.
   const isSalary = data.type === "income" && data.isSalary === true;

@@ -65,11 +65,26 @@ export function RecurringForm({
   onDone?: () => void;
 }) {
   const [pending, startTransition] = React.useTransition();
+
+  // Income has to land as spendable cash: a card is a liability, and the
+  // free-savings pool ignores cards entirely, so a salary banked into one
+  // disappears from the pool. Cost rules may of course be charged to a card.
+  const pickable = React.useMemo(
+    () => (kind === "income" ? accounts.filter((a) => a.type !== "credit_card") : accounts),
+    [accounts, kind],
+  );
+
   const { register, handleSubmit, watch, setValue } = useForm<FormValues>({
     defaultValues: {
       name: initial?.name ?? "",
       amount: initial?.amountMinor != null ? String(initial.amountMinor / 100) : "",
-      accountId: initial?.accountId ?? accounts[0]?.id ?? "",
+      // An older rule may point somewhere no longer offered (e.g. an income
+      // rule saved onto a card before that was disallowed) — repoint it rather
+      // than render an empty picker.
+      accountId:
+        initial?.accountId && pickable.some((a) => a.id === initial.accountId)
+          ? initial.accountId
+          : (pickable[0]?.id ?? ""),
       categoryId: initial?.categoryId ?? "",
       frequency: initial?.frequency ?? "monthly",
       interval: String(initial?.interval ?? 1),
@@ -169,7 +184,7 @@ export function RecurringForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {accounts.map((a) => (
+              {pickable.map((a) => (
                 <SelectItem key={a.id} value={a.id}>
                   {a.name}
                 </SelectItem>

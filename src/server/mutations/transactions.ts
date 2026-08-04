@@ -5,7 +5,13 @@ import { toMinor } from "@/lib/money";
 import { encNull, encInt, encStr } from "@/server/crypto-map";
 import { transactionSchema } from "@/lib/schemas";
 import type { AuthContext } from "@/server/auth";
-import { assertOwnsAccounts, assertOwnsCategory, resolveCreditCardAccount } from "./shared";
+import {
+  INCOME_ON_CARD_ERROR,
+  assertOwnsAccounts,
+  assertOwnsCategory,
+  isCreditCardAccount,
+  resolveCreditCardAccount,
+} from "./shared";
 import { zodFail, type MutationResult } from "./types";
 
 /**
@@ -32,6 +38,12 @@ export async function saveTransactionCore(auth: AuthContext, input: unknown): Pr
 
   await assertOwnsAccounts(user.id, [accountId, data.transferAccountId]);
   await assertOwnsCategory(user.id, data.type === "transfer" ? null : data.categoryId);
+
+  // Cards are excluded from the free-savings pool, so income banked into one
+  // would simply vanish from it. (Pay a card down with a transfer instead.)
+  if (data.type === "income" && (await isCreditCardAccount(user.id, accountId))) {
+    return { ok: false, error: INCOME_ON_CARD_ERROR, status: 400 };
+  }
 
   const payload = {
     type: data.type,
