@@ -10,7 +10,7 @@ import {
   Gauge,
   ArrowRight,
 } from "lucide-react";
-import { getDashboard } from "@/server/queries";
+import { getDashboard, getFreeSavingsHistory } from "@/server/queries";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Money } from "@/components/money";
@@ -24,7 +24,7 @@ import { FreeSavingsExplorer } from "@/components/dashboard/free-savings-explore
 import { ACCOUNT_TYPE_LABELS, type AccountType } from "@/lib/domain";
 
 export default async function DashboardPage() {
-  const dashboard = await getDashboard(90);
+  const [dashboard, poolHistory] = await Promise.all([getDashboard(90), getFreeSavingsHistory()]);
   const {
     accounts,
     netWorthMinor,
@@ -68,6 +68,7 @@ export default async function DashboardPage() {
         nextSalary={nextSalary}
         provisionalPoolAtNextSalaryMinor={provisionalPoolAtNextSalaryMinor}
         daily={timeline.daily}
+        history={poolHistory}
         currency={baseCurrency}
       />
 

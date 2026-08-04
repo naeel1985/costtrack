@@ -1,10 +1,11 @@
 import { format, differenceInCalendarDays } from "date-fns";
-import { AlertTriangle, ShieldCheck, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, History, ShieldCheck, TrendingUp, Wallet } from "lucide-react";
 import { Money } from "@/components/money";
 import { AnimatedMoney } from "@/components/animated-money";
+import { PoolHistoryDialog } from "@/components/dashboard/pool-history-dialog";
 import { cn } from "@/lib/utils";
 import type { FreeSavingsPoint } from "@/lib/cashflow-timeline";
-import type { NextSalary } from "@/server/queries";
+import type { FreeSavingsHistory, NextSalary } from "@/server/queries";
 
 /**
  * The dashboard's headline answer to "am I going to be okay?".
@@ -56,6 +57,7 @@ export function PoolHero({
   nextSalary,
   provisionalPoolAtNextSalaryMinor,
   daily,
+  history,
   currency,
 }: {
   poolMinor: number;
@@ -64,6 +66,7 @@ export function PoolHero({
   nextSalary: NextSalary | null;
   provisionalPoolAtNextSalaryMinor: number | null;
   daily: FreeSavingsPoint[];
+  history: FreeSavingsHistory;
   currency: string;
 }) {
   const spark = buildSpark(daily);
@@ -94,18 +97,20 @@ export function PoolHero({
             <Wallet className="h-4 w-4" /> Free-savings pool
           </div>
 
-          {/* The one figure worth animating on this page. */}
-          <AnimatedMoney
-            minor={poolMinor}
-            currency={currency}
-            colored
-            className="mt-2 text-4xl leading-tight font-bold tracking-tight sm:text-5xl"
-          />
-
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            As of {format(new Date(), "d MMM yyyy")} — only moves when a confirmed salary closes a
-            cycle.
-          </p>
+          {/* The one figure worth animating on this page. Click through for the
+              cycle-by-cycle ledger behind it. */}
+          <PoolHistoryDialog history={history} currency={currency}>
+            <AnimatedMoney
+              minor={poolMinor}
+              currency={currency}
+              colored
+              className="mt-2 text-4xl leading-tight font-bold tracking-tight sm:text-5xl"
+            />
+            <span className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
+              As of {format(new Date(), "d MMM yyyy")} · see how it was built
+              <History className="h-3 w-3 opacity-70" />
+            </span>
+          </PoolHistoryDialog>
 
           {/* Verdict: icon + words, so it never rests on colour alone. */}
           {poolDryDate ? (

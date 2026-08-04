@@ -841,6 +841,84 @@ export async function getTransactions(filters: TransactionFilters = {}) {
   return mapped;
 }
 
+export interface FreeSavingsCycleRow {
+  id: string;
+  cycleStart: Date;
+  cycleEnd: Date;
+  incomeMinor: number;
+  costsMinor: number;
+  /** income − costs; signed. */
+  savingsMinor: number;
+  /** The pool's value once this cycle was folded in; signed. */
+  poolAfterMinor: number;
+}
+
+export interface FreeSavingsHistory {
+  /** When the account was opened — where the pool's story starts. */
+  accountCreatedAt: Date;
+  /** Every realized cycle, oldest first. */
+  cycles: FreeSavingsCycleRow[];
+  /** Today's pool figure, matching the dashboard. */
+  poolMinor: number;
+  /**
+   * False when no cycle has ever closed. The pool then falls back to live asset
+   * balances for display, so the figure is NOT yet a realized ledger.
+   */
+  realized: boolean;
+  /** Start of the cycle currently accruing (the last confirmation, or account open). */
+  anchorDate: Date;
+  /** True when income rules exist but none is flagged as salary — no cycle can close. */
+  salaryRuleMissing: boolean;
+}
+
+/**
+ * The pool's full history, back to the account's creation.
+ *
+ * Read-only: it reports the append-only `FreeSavingsCycle` ledger written by
+ * the salary-debit mutation and never realizes a cycle itself. When nothing has
+ * closed yet it says so rather than inventing a history, and reports whether a
+ * missing salary flag is the reason.
+ */
+export async function getFreeSavingsHistory(): Promise<FreeSavingsHistory> {
+  const { user, dek } = await requireUser();
+
+  // The session carries identity, not the row — read createdAt for the start of
+  // the pool's story.
+  const [row, rawCycles, state, rawIncomeRules, accounts] = await Promise.all([
+    prisma.user.findUnique({ where: { id: user.id }, select: { createdAt: true } }),
+    prisma.freeSavingsCycle.findMany({ where: { userId: user.id }, orderBy: { cycleEnd: "asc" } }),
+    prisma.freeSavingsState.findUnique({ where: { userId: user.id } }),
+    prisma.recurringRule.findMany({ where: { userId: user.id, type: "income", isActive: true } }),
+    getAccountsWithBalances(),
+  ]);
+  const accountCreatedAt = row?.createdAt ?? new Date();
+
+  const cycles: FreeSavingsCycleRow[] = rawCycles.map((c) => ({
+    id: c.id,
+    cycleStart: c.cycleStart,
+    cycleEnd: c.cycleEnd,
+    incomeMinor: decInt(c.incomeEnc, dek),
+    costsMinor: decInt(c.costsEnc, dek),
+    savingsMinor: decInt(c.savingsEnc, dek),
+    poolAfterMinor: decInt(c.poolAfterEnc, dek),
+  }));
+
+  // Mirrors loadForwardView: the realized ledger if a cycle has closed, else
+  // today's live asset balance purely so the card has something to show.
+  const liveSavingsMinor = accounts
+    .filter((a) => !a.isSystem && a.type !== "credit_card")
+    .reduce((s, a) => s + a.balanceMinor, 0);
+
+  return {
+    accountCreatedAt,
+    cycles,
+    poolMinor: state ? decInt(state.poolEnc, dek) : liveSavingsMinor,
+    realized: state != null,
+    anchorDate: state?.anchorDate ?? accountCreatedAt,
+    salaryRuleMissing: rawIncomeRules.length > 0 && !rawIncomeRules.some((r) => r.isSalary),
+  };
+}
+
 export interface CardStatementItem {
   date: Date;
   amountMinor: number;
